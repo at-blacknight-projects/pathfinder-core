@@ -1,3 +1,15 @@
+## [0.1.0-alpha.9](https://github.com/at-blacknight-projects/pathfinder-core/compare/v0.1.0-alpha.8...v0.1.0-alpha.9) (2026-09-11)
+
+
+### Features
+
+* replace pfc_advanced_options with pfc_startup_script ([e0681f3](https://github.com/at-blacknight-projects/pathfinder-core/commit/e0681f32e0cfb207586d64d5165ee9ee18892b4a))
+
+
+### Documentation
+
+* confirm no startup-script object exists, and record four surveyed roots ([10fb15a](https://github.com/at-blacknight-projects/pathfinder-core/commit/10fb15aa94b024156390c4c581dec4d764b7acd6)), closes [LegacyPanels#0](https://github.com/at-blacknight-projects/LegacyPanels/issues/0) [Meters#0](https://github.com/at-blacknight-projects/Meters/issues/0) [Requests#0](https://github.com/at-blacknight-projects/Requests/issues/0) [UpdateModerators#0](https://github.com/at-blacknight-projects/UpdateModerators/issues/0) [System#0](https://github.com/at-blacknight-projects/System/issues/0) [.Validation#0](https://github.com/at-blacknight-projects/.Validation/issues/0) [System#0](https://github.com/at-blacknight-projects/System/issues/0) [.SupportLink#0](https://github.com/at-blacknight-projects/.SupportLink/issues/0) [Meters#0](https://github.com/at-blacknight-projects/Meters/issues/0)
+
 ## [0.1.0-alpha.8](https://github.com/at-blacknight-projects/pathfinder-core/compare/v0.1.0-alpha.7...v0.1.0-alpha.8) (2026-09-11)
 
 
