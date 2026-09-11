@@ -1,3 +1,11 @@
+## [0.1.0-alpha.3](https://github.com/at-blacknight-projects/pathfinder-core/compare/v0.1.0-alpha.2...v0.1.0-alpha.3) (2026-09-11)
+
+
+### Features
+
+* **advanced:** manage Advanced options, including all log rotation knobs ([f860ed9](https://github.com/at-blacknight-projects/pathfinder-core/commit/f860ed90a98a2160bd497d2b3f1ccacd220cd9fb)), closes [RotateRule#0](https://github.com/at-blacknight-projects/RotateRule/issues/0) [Logs#0](https://github.com/at-blacknight-projects/Logs/issues/0) [Logs#0](https://github.com/at-blacknight-projects/Logs/issues/0) [.LogRotator#0](https://github.com/at-blacknight-projects/.LogRotator/issues/0) [.RotateRule#0](https://github.com/at-blacknight-projects/.RotateRule/issues/0) [LogicFlows#0](https://github.com/at-blacknight-projects/LogicFlows/issues/0) [Devices#0](https://github.com/at-blacknight-projects/Devices/issues/0) [Routers#0](https://github.com/at-blacknight-projects/Routers/issues/0) [LogicFlows#0](https://github.com/at-blacknight-projects/LogicFlows/issues/0) [RotateRule#0](https://github.com/at-blacknight-projects/RotateRule/issues/0) [Logs#0](https://github.com/at-blacknight-projects/Logs/issues/0) [Logs#0](https://github.com/at-blacknight-projects/Logs/issues/0) [.LogRotator#0](https://github.com/at-blacknight-projects/.LogRotator/issues/0) [.RotateRule#0](https://github.com/at-blacknight-projects/.RotateRule/issues/0) [LogicFlows#0](https://github.com/at-blacknight-projects/LogicFlows/issues/0) [Devices#0](https://github.com/at-blacknight-projects/Devices/issues/0) [Routers#0](https://github.com/at-blacknight-projects/Routers/issues/0) [LogicFlows#0](https://github.com/at-blacknight-projects/LogicFlows/issues/0) [Devices#0](https://github.com/at-blacknight-projects/Devices/issues/0) [Devices#0](https://github.com/at-blacknight-projects/Devices/issues/0) [Devices#0](https://github.com/at-blacknight-projects/Devices/issues/0) [Devices#0](https://github.com/at-blacknight-projects/Devices/issues/0)
+* **logs:** support all four writer types, not just UDP syslog ([7b4ebd9](https://github.com/at-blacknight-projects/pathfinder-core/commit/7b4ebd96385bcde41e5b0d921e8232b86aa4bb50)), closes [Logs#0](https://github.com/at-blacknight-projects/Logs/issues/0)
+
 ## [0.1.0-alpha.2](https://github.com/at-blacknight-projects/pathfinder-core/compare/v0.1.0-alpha.1...v0.1.0-alpha.2) (2026-09-11)
 
 
