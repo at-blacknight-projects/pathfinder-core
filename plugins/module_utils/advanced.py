@@ -34,6 +34,14 @@ no error. So entries are marked with their measured access and the module
 refuses to write one that is not RW - rather than sending it and reporting a
 confident, meaningless success.
 
+**Durability was measured, not assumed.** The page is a startup script that
+SapV2 cannot read or write, so values set at runtime might have been stamped
+back at boot. They are not: across a real reboot of a Core PRO (with
+``StartupFileProcessed`` True), rotation values differing from the vendor
+defaults survived unchanged. That proves the startup script does not reassert
+the defaults on that host; it does not prove a novel value would survive, so
+the module reports ``durable: observed`` rather than claiming a guarantee.
+
 **One vendor line uses ``NOP``, not ``SET``**
 (``NOP Devices#0.EndpointDiscoverers#0.LivewireEndpointDiscovery
 localAxiaIP=...``). What NOP does differently has not been characterised, so

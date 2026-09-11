@@ -66,16 +66,22 @@ options:
     type: float
     default: 15.0
 notes:
-  - "DURABILITY IS UNVERIFIED. The Advanced options page is a script of API
-    commands the device runs at startup, and that script is NOT reachable over
-    SapV2 - there is no startup-file object anywhere in the tree. So a value
-    set here takes effect immediately and is verified, but whether it survives
-    a restart depends on whether the device persists that particular property
-    or reasserts it from the startup script. An attempt to measure this was
-    inconclusive because C(Devices#0.ForceServiceRestart) did not actually
-    restart the service (C(LastStarted) was unchanged). Until a real restart
-    test is done, treat changes as runtime-only and update the startup script
-    as well for anything that must survive a reboot."
+  - "DURABILITY - measured across a real reboot, with one caveat. The Advanced
+    options page is a script of API commands the device runs at startup, and
+    that script is not reachable over SapV2, so there was a real possibility
+    that a value set here would be stamped back at boot. It is not. On a Core
+    PRO rebooted with C(StartupFileProcessed) going True, rotation values that
+    differ from the vendor's documented defaults (C(MaxFileSize) 100 against a
+    default of 1, C(MaxCount) 10 against 3) survived unchanged, along with
+    every other option in this module. So the startup script ran and did not
+    reassert the defaults."
+  - "The caveat: that proves the values on THAT host survive, which is
+    consistent either with the device persisting them or with that host's
+    startup script carrying the same values. It does not prove that a value
+    this module writes for the first time will survive. The airtight test is
+    to set a novel value and reboot again. Until then C(durable) reports
+    C(observed) rather than C(guaranteed), and anything that absolutely must
+    survive a reboot should also be set in the startup script."
   - C(Ready) on the service roots is deliberately not exposed. Toggling it does
     not restart anything, and the one direction that does something disables
     the service.
@@ -137,8 +143,10 @@ report:
   type: dict
 durable:
   description:
-    - Always C(unverified). Whether a change survives a device restart is not
-      established; see the module notes.
+    - Always C(observed). Values in this module were seen to survive a real
+      reboot on a Core PRO whose startup file was processed, but a
+      first-written novel value has not been reboot-tested; see the module
+      notes.
   returned: always
   type: str
 """
@@ -186,8 +194,10 @@ def main():
         check_mode=module.check_mode,
     )
 
+    # Not "guaranteed": survival was observed across a real reboot, but only
+    # for values the host already had. See the module notes.
     result = {"changed": False, "plan": [], "report": {},
-              "durable": "unverified"}
+              "durable": "observed"}
 
     try:
         client.connect(module.params["username"], module.params["password"])
