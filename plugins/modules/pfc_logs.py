@@ -50,25 +50,62 @@ options:
     required: true
   writer:
     description:
-      - The UDP syslog writer to manage. A writer is identified by
-        C(name) and C(ip); both map to properties that are read-only once the
-        object exists.
-      - Syslog on PathfinderCore is UDP-only with port 514 fixed, so C(ip) is a
-        bare address and the device builds the C(udp://<ip>:514/) endpoint URI
-        itself.
+      - The log writer to manage. A writer is identified by C(name) plus its
+        endpoint, and on every type the endpoint property is read-only once the
+        object exists, so changing it means delete-and-recreate.
       - Avoid C(.) in C(name). It is SapV2's path separator, so a dotted name
-        has to be bracket-quoted in every subsequent command.
+        has to be bracket-quoted in every subsequent command. A C(log_file)
+        name is a filename and normally does contain one; the device handles
+        the quoting itself.
     type: dict
     required: true
     suboptions:
       name:
-        description: Writer name, used as its address in the object tree.
+        description:
+          - Writer name, used as its address in the object tree. For
+            C(log_file) this is the filename.
         type: str
         required: true
+      type:
+        description:
+          - Which kind of writer. All four are measured against real hardware
+            and they differ in important ways.
+          - C(udp_syslog) - the only type emitting syslog framing, and the only
+            one with in-band identity. UDP, port 514 fixed. Requires I(ip).
+            Creatable.
+          - C(tcp_client) - the device connects out. Plain text, no header or
+            tag. B(Cannot be created) - every known init form is silently
+            ignored by the device - so an existing one can be configured and
+            deleted, but not made. This is the legacy path being retired.
+          - C(tcp_listener) - the device listens and a collector connects in.
+            Plain text. Requires I(port); creating one without it yields an
+            object with no properties that can only be deleted. Creatable.
+          - C(log_file) - writes locally on the device. Has B(no writable
+            properties at all), so configuring one means its subscriptions and
+            MessageLogSettings. Creatable.
+        type: str
+        choices: [udp_syslog, tcp_client, tcp_listener, log_file]
+        default: udp_syslog
       ip:
-        description: Bare IP address of the syslog receiver.
+        description:
+          - Bare IP address of the receiver. Required for C(udp_syslog), which
+            builds C(udp://<ip>:514/) from it.
+          - Ignored by C(tcp_listener) (it always binds C(0.0.0.0)) and by
+            C(log_file); supplying it for those is rejected rather than
+            silently dropped.
         type: str
-        required: true
+      port:
+        description:
+          - Listen port. Required for C(tcp_listener). Ignored by
+            C(udp_syslog), whose port is fixed at 514.
+        type: int
+      properties:
+        description:
+          - Writable properties on the writer object itself. Only
+            C(tcp_client) (C(GetOnConnect), C(OfflineMaxCacheCount)) and
+            C(tcp_listener) (those plus C(Listening)) have any; C(udp_syslog)
+            and C(log_file) have none, and naming one there is rejected.
+        type: dict
   state:
     description:
       - C(present) reconciles the writer. C(absent) deletes it and every
@@ -267,6 +304,7 @@ from ansible_collections.at_blacknight.pathfinder_core.plugins.module_utils.logs
     read_actual,
     validate_message_log_settings,
     validate_subscriptions,
+    validate_writer,
     verify,
 )
 
@@ -282,7 +320,12 @@ def main():
                           fallback=(env_fallback, ["PFC_PASS"])),
             writer=dict(type="dict", required=True, options=dict(
                 name=dict(type="str", required=True),
-                ip=dict(type="str", required=True),
+                ip=dict(type="str"),
+                type=dict(type="str", default="udp_syslog",
+                          choices=["udp_syslog", "tcp_client", "tcp_listener",
+                                   "log_file"]),
+                port=dict(type="int"),
+                properties=dict(type="dict"),
             )),
             state=dict(type="str", default="present", choices=["present", "absent"]),
             subscriptions=dict(type="list", elements="dict", default=[], options=dict(
@@ -306,13 +349,17 @@ def main():
     params = module.params
     desired = {
         "name": params["writer"]["name"],
-        "ip": params["writer"]["ip"],
+        "ip": params["writer"].get("ip"),
+        "port": params["writer"].get("port"),
+        "type": params["writer"].get("type") or "udp_syslog",
+        "properties": params["writer"].get("properties") or {},
         "state": params["state"],
         "subscriptions": params["subscriptions"] or [],
         "message_log_settings": params["message_log_settings"] or {},
     }
 
-    problems = (validate_subscriptions(desired["subscriptions"])
+    problems = (validate_writer(desired)
+                + validate_subscriptions(desired["subscriptions"])
                 + validate_message_log_settings(desired["message_log_settings"]))
     if problems:
         # Fail before opening a session. Every one of these would otherwise be
@@ -339,7 +386,7 @@ def main():
     try:
         client.connect(params["username"], params["password"])
 
-        actual = read_actual(client, desired["name"])
+        actual = read_actual(client, desired["name"], desired["type"])
         actions = build_plan(
             desired, actual,
             on_immutable_change=params["on_immutable_change"],
@@ -347,7 +394,7 @@ def main():
         )
         result["plan"] = [action.to_dict() for action in actions]
 
-        blocked = [a for a in actions if a.kind == "blocked_immutable"]
+        blocked = [a for a in actions if a.kind.startswith("blocked_")]
         if blocked:
             module.fail_json(msg=blocked[0].summary, **result)
 

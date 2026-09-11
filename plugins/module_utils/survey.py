@@ -34,9 +34,14 @@ from __future__ import absolute_import, division, print_function
 __metaclass__ = type
 
 
-#: Roots worth surveying. Deliberately explicit rather than discovered, so a
-#: survey cannot wander into something expensive by accident.
-DEFAULT_ROOTS = [
+#: Fallback roots, used only if root discovery fails.
+#:
+#: These were originally the hardcoded list, and they were wrong: `get .`
+#: enumerates the root and returns 17 objects, six of which were missing here
+#: (Clustering#0, LegacyPanels#0, Meters#0, Requests#0, UpdateModerators#0,
+#: UserPanels#0). A survey that silently omits a third of the tree is worse
+#: than no survey, so discovery is preferred and this is only a safety net.
+FALLBACK_ROOTS = [
     "Logs#0",
     "Users#0",
     "System#0",
@@ -49,6 +54,20 @@ DEFAULT_ROOTS = [
     "PropertyGroups#0",
     "TimeEvents#0",
 ]
+
+#: Kept as an alias so existing callers do not break.
+DEFAULT_ROOTS = FALLBACK_ROOTS
+
+
+def discover_roots(client):
+    """Enumerate the top-level objects with ``get .``.
+
+    Preferred over a hardcoded list because the object set varies by firmware
+    and licensed feature set, and anything missing from a hardcoded list is
+    invisible rather than reported.
+    """
+    roots = sorted(client.children(""))
+    return roots or list(FALLBACK_ROOTS)
 
 
 def type_of(path):
@@ -90,7 +109,7 @@ def survey(client, roots=None, max_instances_per_type=1, probe_constructor=True,
     populated device is effectively a denial of afternoon. `max_depth` and
     `max_commands` are the brakes; widen them deliberately.
     """
-    roots = list(DEFAULT_ROOTS if roots is None else roots)
+    roots = list(discover_roots(client) if roots is None else roots)
     snapshot = {}
     seen_types = {}
     queue = [(root, 0) for root in roots]
