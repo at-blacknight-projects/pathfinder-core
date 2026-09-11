@@ -1,3 +1,15 @@
+## [0.1.0-alpha.8](https://github.com/at-blacknight-projects/pathfinder-core/compare/v0.1.0-alpha.7...v0.1.0-alpha.8) (2026-09-11)
+
+
+### Bug Fixes
+
+* **advanced:** audit the whole startup script, not just modelled options ([8c9e322](https://github.com/at-blacknight-projects/pathfinder-core/commit/8c9e32250132606a15905ad64d9889558482d4db)), closes [Logs#0](https://github.com/at-blacknight-projects/Logs/issues/0)
+
+
+### Documentation
+
+* how to install a local build, and the pre-1.0 versioning rules ([9ac83ee](https://github.com/at-blacknight-projects/pathfinder-core/commit/9ac83eea58d05ea5589a6de718c6489edc923cdd))
+
 ## [0.1.0-alpha.7](https://github.com/at-blacknight-projects/pathfinder-core/compare/v0.1.0-alpha.6...v0.1.0-alpha.7) (2026-09-11)
 
 
