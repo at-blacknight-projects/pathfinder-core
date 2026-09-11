@@ -755,7 +755,6 @@ def verify(client, desired, purge_subscriptions=False):
     return actual
 
 
-
 # -- diff ----------------------------------------------------------------
 
 def render_state(desired, actual, purge_subscriptions=False):
