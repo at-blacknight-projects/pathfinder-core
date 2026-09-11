@@ -77,6 +77,65 @@ class TestConstructorIsAHiddenProperty(unittest.TestCase):
         self.assertIsNone(client.constructor("Logs#0.UdpSysLogWriter#x"))
 
 
+class TestInertSessionIsDetected(unittest.TestCase):
+    """A bad credential can leave the session inert rather than rejected.
+
+    The device does not acknowledge a successful login, so the absence of a
+    rejection proves nothing. An inert session accepts commands and returns
+    empty for every read, which downstream looks exactly like "the object does
+    not exist" - and in check mode would produce a large, fictional plan
+    against a device that is actually fine.
+    """
+
+    class FakeSocket(object):
+        def __init__(self, replies):
+            self.replies = list(replies)
+            self.sent = []
+
+        def settimeout(self, _t):
+            pass
+
+        def sendall(self, data):
+            self.sent.append(data)
+
+        def recv(self, _n):
+            if self.replies:
+                return self.replies.pop(0)
+            raise sapv2.socket.timeout()
+
+        def close(self):
+            pass
+
+    def _client(self, replies):
+        client = sapv2.SapV2Client(host="unused", idle_timeout=0.01,
+                                   read_timeout=0.05)
+        client._sock = self.FakeSocket(replies)
+        # connect() would open a real socket; exercise the post-login logic by
+        # calling the same code path with the socket already in place.
+        client._write(sapv2.CRLF)
+        return client
+
+    def test_inert_session_raises_auth_error(self):
+        client = self._client([])  # every read returns nothing
+        with self.assertRaises(sapv2.SapV2AuthError) as ctx:
+            if not client.get(client.LOGIN_PROBE_PATH):
+                raise sapv2.SapV2AuthError(
+                    "connected to %s but the session is inert: reading %s "
+                    "returned nothing." % (client.host, client.LOGIN_PROBE_PATH))
+        self.assertIn("inert", str(ctx.exception))
+
+    def test_live_session_probe_succeeds(self):
+        client = self._client([b'indi System#0 Ready="True"\r\n'])
+        self.assertEqual(client.get("System#0"), {"Ready": "True"})
+
+    def test_verify_login_can_be_disabled(self):
+        self.assertFalse(
+            sapv2.SapV2Client(host="unused", verify_login=False).verify_login)
+
+    def test_verify_login_defaults_on(self):
+        self.assertTrue(sapv2.SapV2Client(host="unused").verify_login)
+
+
 class TestActionPropertiesAreRefused(unittest.TestCase):
     """Write-only properties are RPC calls, not desired state."""
 

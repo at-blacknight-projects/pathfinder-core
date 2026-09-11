@@ -381,9 +381,13 @@ class SapV2Client(object):
     rather than in each reconciler.
     """
 
+    #: Cheap, always-present object used to prove a session is really
+    #: authenticated. See :meth:`connect`.
+    LOGIN_PROBE_PATH = "System#0"
+
     def __init__(self, host, port=DEFAULT_PORT, connect_timeout=DEFAULT_CONNECT_TIMEOUT,
                  idle_timeout=DEFAULT_IDLE_TIMEOUT, read_timeout=DEFAULT_READ_TIMEOUT,
-                 guard=None, check_mode=False, transcript=None):
+                 guard=None, check_mode=False, transcript=None, verify_login=True):
         self.host = host
         self.port = port
         self.connect_timeout = connect_timeout
@@ -397,6 +401,9 @@ class SapV2Client(object):
         #: caller so a check-mode run is a readable plan and an enforcing run is
         #: an audit trail.
         self.transcript = [] if transcript is None else transcript
+        #: Prove the session is authenticated with a read, rather than trusting
+        #: the absence of a rejection. See :meth:`connect`.
+        self.verify_login = verify_login
         self._sock = None
 
     # -- session ---------------------------------------------------------
@@ -426,13 +433,27 @@ class SapV2Client(object):
 
         self._write("Login %s %s%s" % (username, password, CRLF))
         reply = self._drain().strip()
-        # There is no positive acknowledgement to a successful login either, so
-        # this checks only for an explicit rejection. A wrong password on some
-        # firmware just leaves the session inert, which the first read exposes.
         if "fail" in reply.lower() or "denied" in reply.lower():
             raise SapV2AuthError("login rejected by %s: %s" % (self.host, reply[:200]))
         self.transcript.append({"verb": "login", "command": "Login <user> <redacted>",
                                 "write": False, "response": reply[:200]})
+
+        # There is no positive acknowledgement of a SUCCESSFUL login either, so
+        # the check above only catches an explicit rejection. A bad credential
+        # can instead leave the session inert: commands are accepted and every
+        # read comes back empty. Left unchecked that surfaces much later as
+        # "the writer does not exist" or an empty drift report against a device
+        # that is actually fine - and in check mode it would report a large,
+        # entirely fictional plan.
+        #
+        # So prove the session works with one cheap read of an object every
+        # device has, and fail as an auth error at the point of connection.
+        if self.verify_login and not self.get(self.LOGIN_PROBE_PATH):
+            raise SapV2AuthError(
+                "connected to %s but the session is inert: reading %s returned "
+                "nothing. SapV2 does not acknowledge a successful login, so "
+                "this is what a rejected credential looks like."
+                % (self.host, self.LOGIN_PROBE_PATH))
         return self
 
     def close(self):
