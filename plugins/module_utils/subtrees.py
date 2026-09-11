@@ -199,20 +199,25 @@ SUBTREES = [
     ),
     Subtree(
         "LegacyPanels#0", UNCLASSIFIED,
-        "Not assessed. Found by enumerating the root with 'get .'.",
+        "Surveyed: 8 properties, only Ready writable. Nothing here worth "
+        "reconciling, and Ready is deliberately not exposed anywhere in this "
+        "collection.",
     ),
     Subtree(
         "Meters#0", UNCLASSIFIED,
-        "Audio metering - almost certainly pure runtime telemetry, but not "
-        "measured. Found by enumerating the root.",
+        "Audio metering. Surveyed: CurrentMeteringPollRate, DefaultLowLevel "
+        "and DefaultClipLevel are writable, so it is configuration rather than "
+        "pure telemetry as first assumed. Left unclassified because changing "
+        "metering thresholds affects what operators see, and nobody has asked "
+        "for it.",
     ),
     Subtree(
         "Requests#0", UNCLASSIFIED,
-        "Not assessed. Found by enumerating the root.",
+        "Surveyed: 5 properties, none writable. Nothing to reconcile.",
     ),
     Subtree(
         "UpdateModerators#0", UNCLASSIFIED,
-        "Not assessed. Found by enumerating the root.",
+        "Surveyed: 2 properties, only Ready writable. Nothing to reconcile.",
     ),
     Subtree(
         "TimeEvents#0", UNCLASSIFIED,
