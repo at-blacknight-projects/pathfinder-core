@@ -16,9 +16,10 @@ version_added: "0.1.0"
 description:
   - B(This module is a stub and always fails.) It exists to hold the design
     constraints for the C(Devices#0) subtree.
-  - Third in the implementation order, after C(pfc_logs) and the
-    C(pfc_users)/C(pfc_access) pair. Higher blast radius than either: these are
-    the definitions of the audio devices the router controls.
+  - >-
+    Third in the implementation order, after C(pfc_logs) and the
+    C(pfc_users)/C(pfc_access) pair. Higher blast radius than either - these
+    are the definitions of the audio devices the router controls.
 options:
   host:
     description: Hostname or address of the PathfinderCore device.

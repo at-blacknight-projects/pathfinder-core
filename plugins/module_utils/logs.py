@@ -271,7 +271,7 @@ def _plan_subscriptions(desired, actual, recreate, purge):
     wanted = dict((str(s["typeid"]), s) for s in desired.get("subscriptions") or [])
     current = {} if recreate else actual.get("subscriptions", {})
 
-    for typeid in sorted(wanted, key=lambda t: int(t)):
+    for typeid in sorted(wanted, key=int):
         sub = wanted[typeid]
         existing = current.get(typeid)
         if existing is None:
@@ -310,7 +310,7 @@ def _plan_subscriptions(desired, actual, recreate, purge):
                         "from": have_expr, "to": want_expr}))
 
     if purge:
-        for typeid in sorted(set(current) - set(wanted), key=lambda t: int(t)):
+        for typeid in sorted(set(current) - set(wanted), key=int):
             actions.append(Action(
                 "subscription_delete",
                 "delete unmanaged subscription %s from %s" % (typeid, name),

@@ -241,7 +241,7 @@ def parse_properties(payload):
     for item in _split_top_level(payload):
         if "=" not in item:
             continue
-        key, _, value = item.partition("=")
+        key, _sep, value = item.partition("=")
         props[key.strip()] = _unquote(value)
     return props
 
@@ -263,7 +263,7 @@ def parse_error(text):
     for item in _split_top_level(match.group("detail"), separator=" "):
         if "=" not in item:
             continue
-        key, _, value = item.partition("=")
+        key, _sep, value = item.partition("=")
         detail[key.strip()] = _unquote(value)
     return (match.group("path"),
             detail.get("$OP") or detail.get("OP"),
@@ -574,7 +574,7 @@ class SapV2Client(object):
             return None
         payload = ",".join("%s=%s" % (k, render_value(v)) for k, v in items)
         self._write_command("set %s %s" % (path, payload), "set", path,
-                            properties=[k for k, _ in items])
+                            properties=[k for k, _v in items])
         return None
 
     def init(self, type_path, params):

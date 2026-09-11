@@ -1,0 +1,4 @@
+# The collection is developed on Windows but consumed on Linux, and
+# ansible-test's line-endings sanity check rejects CRLF. Normalise on commit so
+# the checked-in content is always LF regardless of the contributor's platform.
+* text=auto eol=lf

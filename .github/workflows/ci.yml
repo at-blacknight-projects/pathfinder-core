@@ -1,0 +1,89 @@
+---
+name: CI
+
+# Release channels come from atb-ci's own semantic-release config: main is the
+# stable channel, and rc/uat/dev/alpha are prerelease channels.
+on:
+  push:
+    branches: [main, rc, uat, dev, alpha]
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  units:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # The module_utils depend only on the standard library, so the planner,
+      # the parser and the boundary guard are all testable with no Ansible and
+      # no device. That is the point of the layering, and it keeps this job to
+      # a few seconds.
+      - name: Run unit tests
+        run: python -m unittest discover -s tests/unit -t tests/unit -v
+
+  sanity:
+    name: ansible-test sanity
+    runs-on: ubuntu-latest
+    steps:
+      # ansible-test requires the collection to sit at a path ending
+      # ansible_collections/<namespace>/<name>/, so check out into one.
+      - uses: actions/checkout@v4
+        with:
+          path: ansible_collections/at_blacknight/pathfinder_core
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install ansible-core
+        run: pip install 'ansible-core>=2.16,<2.17'
+
+      # Catches things unit tests cannot: invalid DOCUMENTATION YAML (which
+      # makes a module's docs unusable), argument_spec and documentation
+      # disagreeing, CRLF line endings, and executable bits on modules.
+      - name: Run sanity tests
+        working-directory: ansible_collections/at_blacknight/pathfinder_core
+        run: ansible-test sanity --local --python 3.12
+
+  build:
+    name: Collection builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install ansible-core
+        run: pip install 'ansible-core>=2.16,<2.17'
+
+      # Proves galaxy.yml is valid and the artifact actually assembles, which
+      # is what a consumer's `ansible-galaxy collection install` will do.
+      - name: Build collection artifact
+        run: ansible-galaxy collection build --force
+
+  release:
+    name: Release
+    needs: [units, sanity, build]
+    # Never release from a pull request; the checks above are the PR value.
+    if: github.event_name == 'push'
+    permissions:
+      contents: write
+    uses: at-blacknight/atb-ci/.github/workflows/no-build-release.yml@v0.1.1
+    with:
+      # galaxy.yml carries a hardcoded `version:` that MUST match the release
+      # tag, or `ansible-galaxy collection install` resolves a tag whose
+      # artifact declares a different version. atb-ci's text replacement keeps
+      # them in step and commits the result alongside the changelog.
+      enable-text-replacement: true
+      replacement-files: '["galaxy.yml"]'
+      replacement-specs: '[{"pattern": "^version: .*", "replacement": "version: {{version}}"}]'

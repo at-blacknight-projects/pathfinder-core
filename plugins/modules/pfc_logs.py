@@ -105,7 +105,8 @@ options:
       customname:
         description:
           - Friendly name stored on the device. Read-only after creation.
-          - This does NOT reach the wire - syslog lines carry only
+          - >-
+            This does NOT reach the wire - syslog lines carry only
             C(PFC: <numeric id> <message>) - so it is device-side metadata for
             the GUI and local log files. Readable names for dashboards have to
             come from a value mapping keyed on the numeric id.
