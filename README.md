@@ -122,6 +122,32 @@ importing the collection outside an `ansible_collections/` tree.
 For `ansible-test`, the repo must be checked out at a path ending
 `ansible_collections/at_blacknight/pathfinder_core/`.
 
+## Installing a local build
+
+`ansible-galaxy collection install` takes a path, and a glob over the build
+directory will happily match an OLD artifact without saying so - you get a
+stale collection and a confusing "Unsupported parameters" error from a module
+that does support them. Always clear the directory first:
+
+```bash
+rm -f *.tar.gz
+ansible-galaxy collection build --force
+ansible-galaxy collection install ./at_blacknight-pathfinder_core-*.tar.gz   -p /path/to/consuming-repo/collections --force
+```
+
+## Versioning
+
+Pre-1.0, on the `alpha` prerelease channel. Every `alpha.N` is a prerelease of
+the same unreleased `0.1.0`, so a `feat` advances the prerelease counter rather
+than the base version.
+
+Do NOT use `feat!:` or a `BREAKING CHANGE:` footer while pre-1.0. semantic-
+release treats either as a major bump unconditionally, which lands on `1.0.0`
+and claims an API stability this collection does not have. Describe the
+incompatibility in the body instead - and note the footer is matched
+case-insensitively at the start of any line, so a wrapped sentence beginning
+"breaking change" is enough to trigger it.
+
 ## Status
 
 Version 0.1.0. `pfc_logs` has been exercised end to end against a Core PRO:
