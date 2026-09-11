@@ -1,3 +1,10 @@
+## [0.1.0-alpha.5](https://github.com/at-blacknight-projects/pathfinder-core/compare/v0.1.0-alpha.4...v0.1.0-alpha.5) (2026-09-11)
+
+
+### Bug Fixes
+
+* **sapv2:** stop replies being attributed to the wrong command ([69366b4](https://github.com/at-blacknight-projects/pathfinder-core/commit/69366b48967d3ccb35b14d6976d6e648ee4b5668)), closes [System#0](https://github.com/at-blacknight-projects/System/issues/0) [Logs#0](https://github.com/at-blacknight-projects/Logs/issues/0)
+
 ## [0.1.0-alpha.4](https://github.com/at-blacknight-projects/pathfinder-core/compare/v0.1.0-alpha.3...v0.1.0-alpha.4) (2026-09-11)
 
 
