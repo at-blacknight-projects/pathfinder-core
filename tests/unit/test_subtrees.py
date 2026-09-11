@@ -16,7 +16,7 @@ class TestClassification(unittest.TestCase):
 
     def test_descendant_paths_inherit_the_root_entry(self):
         entry = self.guard.classify(
-            "Logs#0.UdpSysLogWriter#sca1.LogSubscription#7002")
+            "Logs#0.UdpSysLogWriter#site1.LogSubscription#7002")
         self.assertEqual(entry.path, "Logs#0")
         self.assertEqual(entry.kind, subtrees.DECLARATIVE)
 

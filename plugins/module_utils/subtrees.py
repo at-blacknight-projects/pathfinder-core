@@ -8,7 +8,7 @@ Nothing in PathfinderCore's object model marks which subtrees are declarative.
 ``Logs#0.UdpSysLogWriter#x.RemoteEndpointUri`` and ``MemorySlots#0.MemorySlot#y.SlotValue``
 are the same kind of thing to the API: a writable property on an object. But the
 first is configuration a human chose, and the second is live state that
-zetta-pathfinder-bridge rewrites continuously. A reconciler that enforced
+a separate control bridge rewrites continuously. A reconciler that enforced
 desired state on the second would fight the bridge forever, and on a router's
 ``CurrentSourcePath`` it would actively re-route air.
 
@@ -141,7 +141,7 @@ SUBTREES = [
     Subtree(
         "MemorySlots#0", MIXED,
         "Slot identity and persistence are configuration; SlotValue is live "
-        "state written continuously by zetta-pathfinder-bridge. Slots are also "
+        "state written continuously by whatever control bridge owns them. Slots are also "
         "created and deleted by the bridge at runtime, so purge is never safe "
         "here - a purging reconciler would delete slots it did not create.",
         runtime_properties=["SlotValue", "LastChanged", "LastKnownValue"],

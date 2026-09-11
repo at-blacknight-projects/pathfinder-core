@@ -25,10 +25,10 @@ tags:
 
 dependencies: {}
 
-repository: https://github.com/at-blacknight-projects/pathfinder-core-collection
-documentation: https://github.com/at-blacknight-projects/pathfinder-core-collection/tree/main/docs
-homepage: https://github.com/at-blacknight-projects/pathfinder-core-collection
-issues: https://github.com/at-blacknight-projects/pathfinder-core-collection/issues
+repository: https://github.com/at-blacknight-projects/pathfinder-core
+documentation: https://github.com/at-blacknight-projects/pathfinder-core/tree/main/docs
+homepage: https://github.com/at-blacknight-projects/pathfinder-core
+issues: https://github.com/at-blacknight-projects/pathfinder-core/issues
 
 build_ignore:
   - .github

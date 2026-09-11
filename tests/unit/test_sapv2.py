@@ -24,10 +24,10 @@ class TestSplitTopLevel(unittest.TestCase):
 
 class TestParseIndi(unittest.TestCase):
     def test_single_object(self):
-        text = 'indi Logs#0.UdpSysLogWriter#sca1 Name="sca1", Connected="True"'
+        text = 'indi Logs#0.UdpSysLogWriter#site1 Name="site1", Connected="True"'
         self.assertEqual(
             sapv2.parse_indi(text),
-            {"Logs#0.UdpSysLogWriter#sca1": {"Name": "sca1", "Connected": "True"}})
+            {"Logs#0.UdpSysLogWriter#site1": {"Name": "site1", "Connected": "True"}})
 
     def test_none_reply_is_empty_not_an_error(self):
         # An unknown path and an object with no children are the same shape.
@@ -72,7 +72,7 @@ class TestParseSchema(unittest.TestCase):
 
 class TestPathQuoting(unittest.TestCase):
     def test_plain_name(self):
-        self.assertEqual(sapv2.quote_path_segment("alloy_sca1"), "#alloy_sca1")
+        self.assertEqual(sapv2.quote_path_segment("alloy_site1"), "#alloy_site1")
 
     def test_dotted_name_is_bracketed(self):
         # "." is the path separator, so a dotted name must be bracket-quoted.
@@ -95,8 +95,8 @@ class TestInitRendering(unittest.TestCase):
 
     def test_writer_create_matches_proven_form(self):
         self.assertEqual(
-            sapv2.render_init_params([("name", "spike4"), ("ip", "172.23.150.207")]),
-            "name=spike4,ip=172.23.150.207")
+            sapv2.render_init_params([("name", "spike4"), ("ip", "192.0.2.30")]),
+            "name=spike4,ip=192.0.2.30")
 
     def test_subscription_create_matches_proven_form(self):
         rendered = sapv2.render_init_params([

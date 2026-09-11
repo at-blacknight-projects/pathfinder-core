@@ -91,8 +91,8 @@ state did not take. A reported `changed=true` always means verified.
         username: "{{ lookup('env', 'PFC_USER') }}"
         password: "{{ lookup('env', 'PFC_PASS') }}"
         writer:
-          name: alloy_sca1
-          ip: 172.22.215.236
+          name: alloy_site1
+          ip: 192.0.2.10
         subscriptions: "{{ pfc_subscriptions }}"
       check_mode: true
 ```
@@ -131,5 +131,4 @@ value, read-only-field replacement, and delete.
 
 ## Licence
 
-GPL-3.0-or-later. **The `LICENSE` file still needs the full licence text** —
-see `LICENSE` for the one-line command that fetches it.
+GPL-3.0-or-later. See [`LICENSE`](LICENSE).

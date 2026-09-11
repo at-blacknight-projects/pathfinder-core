@@ -149,7 +149,7 @@ bracket-quoted. The device emits this form itself:
 
 ```
 Logs#0.LogFileWriter#[Connected_Msg.log]
-Devices#0.Fusion#[tcp://192.168.4.11:93]
+Devices#0.Fusion#[tcp://192.0.2.40:93]
 ```
 
 Estate convention is to avoid the problem: use underscores in names you create.

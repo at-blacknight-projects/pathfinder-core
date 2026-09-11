@@ -54,7 +54,7 @@ DEFAULT_ROOTS = [
 def type_of(path):
     """The type name of an object path: the last segment before its ``#``.
 
-    ``Logs#0.UdpSysLogWriter#sca1`` -> ``Logs#0.UdpSysLogWriter``, so two
+    ``Logs#0.UdpSysLogWriter#main`` -> ``Logs#0.UdpSysLogWriter``, so two
     writers on the same device collapse to one schema lookup.
     """
     segment = path.rsplit(".", 1)[-1]

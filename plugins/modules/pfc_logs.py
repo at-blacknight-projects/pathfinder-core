@@ -170,8 +170,8 @@ EXAMPLES = r"""
     username: "{{ pfc_username }}"
     password: "{{ pfc_password }}"
     writer:
-      name: alloy_sca1
-      ip: 172.22.215.236
+      name: alloy_site1
+      ip: 192.0.2.10
     subscriptions: "{{ pfc_subscriptions }}"
   check_mode: true
   register: drift
@@ -182,19 +182,19 @@ EXAMPLES = r"""
     username: "{{ pfc_username }}"
     password: "{{ pfc_password }}"
     writer:
-      name: alloy_bne1
-      ip: 172.17.215.80
+      name: alloy_site2
+      ip: 192.0.2.20
   # No subscriptions and MessageLogSettings defaulting to off means the writer
   # exists but emits nothing until a later run adds them.
 
 - name: Full reconcile including protocol logging
   at_blacknight.pathfinder_core.pfc_logs:
-    host: cns-pfc-002.example.net
+    host: pfc-002.example.net
     username: "{{ lookup('env', 'PFC_USER') }}"
     password: "{{ lookup('env', 'PFC_PASS') }}"
     writer:
-      name: alloy_bne1
-      ip: 172.17.215.80
+      name: alloy_site2
+      ip: 192.0.2.20
     subscriptions:
       - typeid: 1001
         subscription: "sub Devices#0 Connected $MAX_DEPTH=-1"
@@ -215,7 +215,7 @@ EXAMPLES = r"""
     password: "{{ pfc_password }}"
     writer:
       name: old_tcp_target
-      ip: 172.17.215.82
+      ip: 192.0.2.21
     state: absent
 """
 
@@ -233,7 +233,7 @@ plan:
   elements: dict
   sample:
     - action: subscription_create
-      summary: create subscription 1001 (device-connected) on alloy_sca1
+      summary: create subscription 1001 (device-connected) on alloy_site1
       destructive: false
 transcript:
   description:

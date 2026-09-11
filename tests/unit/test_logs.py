@@ -6,9 +6,9 @@ import unittest
 from loader import logs, sapv2
 
 
-WRITER = "alloy_sca1"
-VIP = "172.22.215.236"
-URI = "udp://172.22.215.236:514/"
+WRITER = "alloy_site1"
+VIP = "192.0.2.10"
+URI = "udp://192.0.2.10:514/"
 
 SUB_1001 = {"typeid": 1001,
             "subscription": "sub Devices#0 Connected $MAX_DEPTH=-1",
@@ -218,7 +218,7 @@ class TestApply(unittest.TestCase):
         # Subscription: created under the writer INSTANCE, with severity and
         # customname supplied at init because they are read-only afterwards.
         self.assertEqual(client.writes[1][1],
-                         "Logs#0.UdpSysLogWriter#alloy_sca1.LogSubscription")
+                         "Logs#0.UdpSysLogWriter#alloy_site1.LogSubscription")
         self.assertEqual(dict(client.writes[1][2])["typeid"], 1001)
         self.assertEqual(dict(client.writes[1][2])["severity"], "Warning")
         self.assertEqual(dict(client.writes[1][2])["customname"], "device-connected")
@@ -231,7 +231,7 @@ class TestApply(unittest.TestCase):
         logs.apply_plan(client, desired(), actions)
         self.assertEqual(client.writes[0][0], "del")
         self.assertEqual(client.writes[0][1],
-                         "Logs#0.UdpSysLogWriter#alloy_sca1.LogSubscription#1001")
+                         "Logs#0.UdpSysLogWriter#alloy_site1.LogSubscription#1001")
         self.assertEqual(client.writes[1][0], "init")
 
     def test_blocked_action_writes_nothing(self):
@@ -248,7 +248,7 @@ class TestVerify(unittest.TestCase):
 
     def _client_with(self, state):
         reads = {}
-        path = "Logs#0.UdpSysLogWriter#alloy_sca1"
+        path = "Logs#0.UdpSysLogWriter#alloy_site1"
         if state["exists"]:
             reads[path] = state["properties"]
             reads[path + ".MessageLogSettings#0"] = state["message_log_settings"]
@@ -311,8 +311,8 @@ class TestPathHelpers(unittest.TestCase):
         self.assertEqual(logs.expected_uri("10.1.2.3"), "udp://10.1.2.3:514/")
 
     def test_dotted_writer_name_is_bracket_quoted(self):
-        self.assertEqual(logs.writer_path("alloy.sca1"),
-                         "Logs#0.UdpSysLogWriter#[alloy.sca1]")
+        self.assertEqual(logs.writer_path("alloy.site1"),
+                         "Logs#0.UdpSysLogWriter#[alloy.site1]")
 
 
 if __name__ == "__main__":

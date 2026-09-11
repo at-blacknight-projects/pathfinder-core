@@ -162,10 +162,10 @@ def quote_path_segment(name):
     Estate convention is to avoid the situation entirely by using underscores,
     but existing objects have to be addressable regardless.
 
-    >>> quote_path_segment("alloy_sca1")
-    '#alloy_sca1'
-    >>> quote_path_segment("alloy.sca1")
-    '#[alloy.sca1]'
+    >>> quote_path_segment("alloy_site1")
+    '#alloy_site1'
+    >>> quote_path_segment("alloy.site1")
+    '#[alloy.site1]'
     """
     name = str(name)
     if "." in name or "#" in name or " " in name:
