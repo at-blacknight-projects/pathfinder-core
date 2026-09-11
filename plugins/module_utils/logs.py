@@ -753,3 +753,79 @@ def verify(client, desired, purge_subscriptions=False):
             "reports a rejected write, so these are writes that were sent and "
             "silently did not take: %s" % (name, "; ".join(problems)))
     return actual
+
+
+
+# -- diff ----------------------------------------------------------------
+
+def render_state(desired, actual, purge_subscriptions=False):
+    """Render actual and desired as text, for Ansible's ``--diff``.
+
+    Text rather than nested dicts: the interesting state is one writer, a list
+    of subscription ids and a handful of settings, and a unified text diff of
+    that reads far better than a structural diff of nested objects.
+    """
+    wtype = writer_type(desired.get("type"))
+    path = writer_path(desired["name"], wtype.key)
+
+    def block(exists, properties, subscriptions, settings):
+        if not exists:
+            return "# %s\n(absent)\n" % path
+        lines = ["# %s" % path]
+        if wtype.endpoint_property:
+            lines.append("%s: %s" % (wtype.endpoint_property,
+                                     properties.get(wtype.endpoint_property, "")))
+        for key in wtype.writable_properties:
+            if key in properties:
+                lines.append("%s: %s" % (key, properties[key]))
+        lines.append("subscriptions:")
+        for typeid in sorted(subscriptions, key=int):
+            sub = subscriptions[typeid]
+            lines.append("  %-6s %-14s %-30s %s"
+                         % (typeid, sub.get("Severity", ""),
+                            sub.get("CustomName", ""),
+                            sub.get("Subscription", "")))
+        if not subscriptions:
+            lines.append("  (none)")
+        lines.append("message_log_settings:")
+        for key in MESSAGE_LOG_PROPERTIES:
+            if key in settings:
+                lines.append("  %-18s %s" % (key, settings[key]))
+        if not settings:
+            lines.append("  (none)")
+        return "\n".join(lines) + "\n"
+
+    before = block(actual["exists"], actual["properties"],
+                   actual["subscriptions"], actual["message_log_settings"])
+
+    if desired.get("state") == "absent":
+        return {"before": before, "after": "# %s\n(absent)\n" % path,
+                "before_header": path, "after_header": path}
+
+    want_props = dict(actual["properties"] if actual["exists"] else {})
+    if wtype.endpoint_property and wtype.endpoint_template(desired):
+        want_props[wtype.endpoint_property] = wtype.endpoint_template(desired)
+    for key, value in (desired.get("properties") or {}).items():
+        want_props[key] = normalise_scalar(value)
+
+    want_subs = {}
+    for sub in desired.get("subscriptions") or []:
+        want_subs[str(sub["typeid"])] = {
+            "Subscription": sub.get("subscription", ""),
+            "Severity": sub.get("severity", ""),
+            "CustomName": sub.get("customname", ""),
+        }
+    # Without purge, subscriptions already on the device are left alone, so
+    # they belong in the "after" too. Omitting them would show a deletion the
+    # module is not going to perform.
+    if not purge_subscriptions:
+        for typeid, sub in actual["subscriptions"].items():
+            want_subs.setdefault(typeid, sub)
+
+    want_settings = dict(actual["message_log_settings"])
+    for key, value in (desired.get("message_log_settings") or {}).items():
+        want_settings[key] = normalise_scalar(value)
+
+    after = block(True, want_props, want_subs, want_settings)
+    return {"before": before, "after": after,
+            "before_header": path, "after_header": path}

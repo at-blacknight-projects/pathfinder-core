@@ -302,6 +302,7 @@ from ansible_collections.at_blacknight.pathfinder_core.plugins.module_utils.logs
     apply_plan,
     plan as build_plan,
     read_actual,
+    render_state,
     validate_message_log_settings,
     validate_subscriptions,
     validate_writer,
@@ -393,6 +394,10 @@ def main():
             purge_subscriptions=params["subscriptions_purge"],
         )
         result["plan"] = [action.to_dict() for action in actions]
+        # Populated whether or not --diff was passed; Ansible only renders it
+        # when asked.
+        result["diff"] = render_state(
+            desired, actual, purge_subscriptions=params["subscriptions_purge"])
 
         blocked = [a for a in actions if a.kind.startswith("blocked_")]
         if blocked:

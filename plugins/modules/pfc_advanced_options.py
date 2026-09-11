@@ -222,6 +222,7 @@ def main():
             for key, option, current, value in changes
         ]
         result["report"] = advanced.report(actual)
+        result["diff"] = advanced.render_state(wanted, actual)
         result["changed"] = bool(changes)
 
         if module.check_mode or not changes:

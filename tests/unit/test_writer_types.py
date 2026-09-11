@@ -237,3 +237,36 @@ class TestWriterProperties(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDiffRendering(unittest.TestCase):
+    """--diff must describe what will actually happen, not an idealised state."""
+
+    def test_absent_writer_renders_as_absent(self):
+        d = logs.render_state(desired(), absent_actual())
+        self.assertIn("(absent)", d["before"])
+        self.assertIn("RemoteEndpointUri: udp://192.0.2.10:514/", d["after"])
+
+    def test_existing_subscriptions_survive_in_after_when_not_purging(self):
+        # Without purge the module leaves unmanaged subscriptions alone, so
+        # showing them removed would promise a deletion that never happens.
+        actual = present_actual({"Name": "w", "RemoteEndpointUri": "udp://192.0.2.10:514/"})
+        actual["subscriptions"] = {"6001": {"Subscription": "sub MemorySlots#0 SlotValue",
+                                            "Severity": "Informational",
+                                            "CustomName": "memoryslot-value"}}
+        d = logs.render_state(desired(), actual, purge_subscriptions=False)
+        self.assertIn("6001", d["after"])
+
+    def test_purge_shows_them_going_away(self):
+        actual = present_actual({"Name": "w", "RemoteEndpointUri": "udp://192.0.2.10:514/"})
+        actual["subscriptions"] = {"6001": {"Subscription": "sub MemorySlots#0 SlotValue",
+                                            "Severity": "Informational",
+                                            "CustomName": "memoryslot-value"}}
+        d = logs.render_state(desired(), actual, purge_subscriptions=True)
+        self.assertIn("6001", d["before"])
+        self.assertNotIn("6001", d["after"])
+
+    def test_state_absent_renders_removal(self):
+        actual = present_actual({"Name": "w", "RemoteEndpointUri": "udp://192.0.2.10:514/"})
+        d = logs.render_state(desired(state="absent"), actual)
+        self.assertIn("(absent)", d["after"])

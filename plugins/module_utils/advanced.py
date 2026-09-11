@@ -272,3 +272,26 @@ def report(actual):
             "vendor_default": option.vendor_default,
         }
     return out
+
+
+def render_state(desired, actual):
+    """Render current and desired option values for Ansible's ``--diff``.
+
+    Only the options the caller asked about: a diff of all 21 every run would
+    bury the one line that changed.
+    """
+    lines_before, lines_after = [], []
+    for key in sorted(desired or {}):
+        option = OPTIONS_BY_KEY.get(key)
+        if option is None:
+            continue
+        current = actual.get(option.path, {}).get(option.prop, "")
+        lines_before.append("%-38s %s" % (key, current))
+        lines_after.append("%-38s %s" % (key, normalise(desired[key])))
+    nl = chr(10)
+    return {
+        "before": nl.join(lines_before) + nl if lines_before else "",
+        "after": nl.join(lines_after) + nl if lines_after else "",
+        "before_header": "advanced options",
+        "after_header": "advanced options",
+    }
