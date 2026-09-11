@@ -167,6 +167,33 @@ options:
       - A newly created writer defaults to everything off, so it is inert until
         these are set.
     type: dict
+  rotation:
+    description:
+      - Log rotation and cleanup. C(max_file_size), C(max_count),
+        C(minutes_between_search), C(skip_clean_logs) and
+        C(check_rotation_after_max_writes).
+      - These live under C(Logs#0), which is why they are here rather than in
+        C(pfc_advanced_options) - each reconciler owns a subtree, and two
+        modules on the same properties would conflict.
+      - Device-scoped, unlike the rest of this module. Reconciling two writers
+        on one device applies rotation twice. That is idempotent, but two tasks
+        asking for different values would fight and nothing here can detect it,
+        so set rotation on one task only.
+      - This is the complete set SapV2 exposes. There is no max-age or
+        total-size control. Omit it to leave rotation alone.
+    type: dict
+  startup_script:
+    description:
+      - The device's Advanced options script, as raw command lines copied from
+        the GUI. Optional and purely advisory.
+      - The script replays at boot and is NOT reachable over SapV2, so a value
+        set here can be reverted at the next restart. Supplying the script lets
+        the module warn which requested values that applies to, rather than
+        leaving it to be discovered after a reboot.
+      - Lines that cannot be parsed are reported rather than skipped quietly.
+        An unreadable line is still replayed on every boot.
+    type: list
+    elements: str
   on_immutable_change:
     description:
       - What to do when the writer exists but its endpoint URI differs from
@@ -246,6 +273,22 @@ EXAMPLES = r"""
       SapV2Internal: Both
       LoginFailures: true
 
+- name: Set log rotation, warned about what the startup script will undo
+  at_blacknight.pathfinder_core.pfc_logs:
+    host: "{{ inventory_hostname }}"
+    username: "{{ pfc_username }}"
+    password: "{{ pfc_password }}"
+    writer:
+      name: alloy_site1
+      ip: 192.0.2.10
+    rotation:
+      max_file_size: 1
+      max_count: 3
+    startup_script:
+      - 'SET Logs#0.LogRotator#0.RotateRule#0 MaxFileSize=100'
+      - 'SET Logs#0.LogRotator#0.RotateRule#0 MaxCount=10'
+  # => warns that both revert at the next reboot, and applies them anyway
+
 - name: Retire the legacy writer once the replacement is confirmed
   at_blacknight.pathfinder_core.pfc_logs:
     host: "{{ inventory_hostname }}"
@@ -284,6 +327,23 @@ writer:
   description: The device's state after reconciling, as read back.
   returned: success
   type: dict
+rotation:
+  description: Rotation settings as read from the device.
+  returned: always
+  type: dict
+will_revert_at_reboot:
+  description:
+    - Warnings for requested values the Advanced options script will undo.
+      Empty when no I(startup_script) was given, which means "not checked",
+      NOT "nothing will revert".
+  returned: always
+  type: list
+  elements: str
+startup_script_unparsed:
+  description: Script lines that could not be interpreted, with the reason.
+  returned: always
+  type: list
+  elements: dict
 verified:
   description:
     - Whether a read-back assertion ran and passed. False in check mode, where
@@ -298,8 +358,17 @@ from ansible_collections.at_blacknight.pathfinder_core.plugins.module_utils.sapv
     SapV2Client,
     SapV2Error,
 )
+from ansible_collections.at_blacknight.pathfinder_core.plugins.module_utils import (
+    startup as startup_script,
+)
 from ansible_collections.at_blacknight.pathfinder_core.plugins.module_utils.logs import (
     apply_plan,
+    apply_rotation,
+    plan_rotation,
+    read_rotation,
+    rotation_writes,
+    validate_rotation,
+    verify_rotation,
     plan as build_plan,
     read_actual,
     render_state,
@@ -339,6 +408,8 @@ def main():
             )),
             subscriptions_purge=dict(type="bool", default=False),
             message_log_settings=dict(type="dict"),
+            rotation=dict(type="dict"),
+            startup_script=dict(type="list", elements="str"),
             on_immutable_change=dict(type="str", default="fail",
                                      choices=["fail", "replace"]),
             idle_timeout=dict(type="float", default=1.5),
@@ -359,7 +430,9 @@ def main():
         "message_log_settings": params["message_log_settings"] or {},
     }
 
+    rotation = params["rotation"] or {}
     problems = (validate_writer(desired)
+                + validate_rotation(rotation)
                 + validate_subscriptions(desired["subscriptions"])
                 + validate_message_log_settings(desired["message_log_settings"]))
     if problems:
@@ -382,7 +455,8 @@ def main():
     )
 
     result = {"changed": False, "plan": [], "transcript": client.transcript,
-              "verified": False, "writer": {}}
+              "verified": False, "writer": {}, "rotation": {},
+              "will_revert_at_reboot": [], "startup_script_unparsed": []}
 
     try:
         client.connect(params["username"], params["password"])
@@ -399,6 +473,26 @@ def main():
         result["diff"] = render_state(
             desired, actual, purge_subscriptions=params["subscriptions_purge"])
 
+        # Rotation is device-scoped rather than per-writer, so it is planned
+        # separately and only when asked for.
+        rotation_actual = read_rotation(client) if rotation else {}
+        rotation_actions = plan_rotation(rotation, rotation_actual)
+        actions = actions + rotation_actions
+        result["plan"] = [action.to_dict() for action in actions]
+        result["rotation"] = rotation_actual
+
+        # The Advanced options startup script replays at boot and cannot be
+        # read or written over SapV2, so warn where it will undo this.
+        commands, unparsed = startup_script.parse_script(params["startup_script"])
+        result["startup_script_unparsed"] = [
+            {"line": line, "reason": reason} for line, reason in unparsed]
+        for line, reason in unparsed:
+            module.warn("unparsed startup script line (%s): %s" % (reason, line))
+        reverting = startup_script.conflicts(rotation_writes(rotation), commands)
+        result["will_revert_at_reboot"] = reverting
+        for warning in reverting:
+            module.warn(warning)
+
         blocked = [a for a in actions if a.kind.startswith("blocked_")]
         if blocked:
             module.fail_json(msg=blocked[0].summary, **result)
@@ -411,9 +505,12 @@ def main():
 
         if actions:
             apply_plan(client, desired, actions)
+            apply_rotation(client, rotation_actions)
             result["writer"] = verify(
                 client, desired,
                 purge_subscriptions=params["subscriptions_purge"])
+            if rotation:
+                result["rotation"] = verify_rotation(client, rotation)
             result["verified"] = True
         else:
             result["writer"] = actual

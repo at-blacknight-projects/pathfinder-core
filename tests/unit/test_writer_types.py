@@ -270,3 +270,53 @@ class TestDiffRendering(unittest.TestCase):
         actual = present_actual({"Name": "w", "RemoteEndpointUri": "udp://192.0.2.10:514/"})
         d = logs.render_state(desired(state="absent"), actual)
         self.assertIn("(absent)", d["after"])
+
+
+class TestRotation(unittest.TestCase):
+    """Rotation is under Logs#0, so this module owns it.
+
+    Device-scoped rather than writer-scoped, which is why it is planned
+    separately and only when asked for.
+    """
+
+    ACTUAL = {
+        "Logs#0.LogRotator#0.RotateRule#0": {"MaxFileSize": "100", "MaxCount": "10"},
+        "Logs#0.LogRotator#0": {"MinutesBetweenSearch": "15"},
+        "Logs#0": {"SkipCleanLogs": "False", "CheckRotationAfterMaxWrites": "250"},
+    }
+
+    def test_all_five_knobs_are_known(self):
+        self.assertEqual(sorted(logs.ROTATION_PROPERTIES),
+                         ["check_rotation_after_max_writes", "max_count",
+                          "max_file_size", "minutes_between_search",
+                          "skip_clean_logs"])
+
+    def test_only_differences_are_planned(self):
+        actions = logs.plan_rotation({"max_file_size": 1, "max_count": 10},
+                                     self.ACTUAL)
+        self.assertEqual([a.kind for a in actions], ["rotation_set"])
+        self.assertEqual(actions[0].detail["property"], "MaxFileSize")
+        self.assertEqual(actions[0].detail["to"], "1")
+
+    def test_converged_plans_nothing(self):
+        self.assertEqual(logs.plan_rotation(
+            {"max_file_size": 100, "skip_clean_logs": False}, self.ACTUAL), [])
+
+    def test_omitted_rotation_touches_nothing(self):
+        self.assertEqual(logs.plan_rotation({}, self.ACTUAL), [])
+        self.assertEqual(logs.plan_rotation(None, self.ACTUAL), [])
+
+    def test_property_absent_on_the_device_is_blocked_not_written(self):
+        actions = logs.plan_rotation({"max_file_size": 1},
+                                     {"Logs#0.LogRotator#0.RotateRule#0": {}})
+        self.assertEqual([a.kind for a in actions], ["blocked_absent_property"])
+
+    def test_unknown_setting_is_rejected(self):
+        self.assertTrue(logs.validate_rotation({"max_age_days": 7}))
+
+    def test_non_numeric_is_rejected(self):
+        self.assertTrue(logs.validate_rotation({"max_count": "lots"}))
+
+    def test_intended_writes_feed_the_startup_script_check(self):
+        self.assertEqual(logs.rotation_writes({"max_count": 3}),
+                         [("Logs#0.LogRotator#0.RotateRule#0", "MaxCount", "3")])

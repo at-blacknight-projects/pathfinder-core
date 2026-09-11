@@ -189,20 +189,6 @@ def writer_type(key):
                        % (key, ", ".join(sorted(WRITER_TYPES))))
 
 
-#: Device-scoped log service settings. These live on Logs#0 and LogRotator#0,
-#: not on any writer, which is why they belong to pfc_log_service rather than
-#: pfc_logs - two writers on one device must not fight over them.
-#:
-#: This is the COMPLETE set of rotation-related knobs SapV2 exposes. There is
-#: no retention, max-size, max-age or file-count setting; do not add one
-#: speculatively.
-LOG_SERVICE_PROPERTIES = {
-    "check_rotation_after_max_writes": (LOGS_ROOT, "CheckRotationAfterMaxWrites", "num"),
-    "skip_clean_logs": (LOGS_ROOT, "SkipCleanLogs", "bool"),
-    "ready": (LOGS_ROOT, "Ready", "bool"),
-    "minutes_between_search": (LOG_ROTATOR, "MinutesBetweenSearch", "num"),
-}
-
 #: The only valid values for the four direction-valued MessageLogSettings
 #: properties. ``In`` and ``Out`` look plausible, are accepted on the wire, and
 #: are silently ignored - this constant exists to catch that at plan time
@@ -828,3 +814,120 @@ def render_state(desired, actual, purge_subscriptions=False):
     after = block(True, want_props, want_subs, want_settings)
     return {"before": before, "after": after,
             "before_header": path, "after_header": path}
+
+
+# -- rotation (device-scoped, but part of Logs#0) -------------------------
+
+#: Log rotation and cleanup. Every one of these lives under ``Logs#0``, so it
+#: belongs to this module: each reconciler owns a subtree, and having the
+#: advanced-options module reach in here would put two things on the same
+#: properties.
+#:
+#: Note these are DEVICE-scoped while the rest of this module is WRITER-scoped.
+#: Reconciling two writers on one device therefore applies rotation twice -
+#: idempotent, so harmless, but two tasks asking for DIFFERENT rotation values
+#: would fight and nothing here can detect that. Set it on one task.
+#:
+#: This is the complete set SapV2 exposes. There is no max-age or total-size
+#: control; do not invent one.
+ROTATION_PROPERTIES = {
+    "max_file_size": ("Logs#0.LogRotator#0.RotateRule#0", "MaxFileSize", "num"),
+    "max_count": ("Logs#0.LogRotator#0.RotateRule#0", "MaxCount", "num"),
+    "minutes_between_search": ("Logs#0.LogRotator#0", "MinutesBetweenSearch", "num"),
+    "skip_clean_logs": ("Logs#0", "SkipCleanLogs", "bool"),
+    "check_rotation_after_max_writes": ("Logs#0", "CheckRotationAfterMaxWrites", "num"),
+}
+
+
+def validate_rotation(rotation):
+    """Return human-readable problems with the requested rotation settings."""
+    problems = []
+    for key, value in (rotation or {}).items():
+        spec = ROTATION_PROPERTIES.get(key)
+        if spec is None:
+            problems.append(
+                "unknown rotation setting %r (known: %s)"
+                % (key, ", ".join(sorted(ROTATION_PROPERTIES))))
+            continue
+        if spec[2] == "num":
+            try:
+                int(str(value))
+            except (TypeError, ValueError):
+                problems.append("rotation.%s expects a number, got %r" % (key, value))
+    return problems
+
+
+def rotation_paths():
+    """The distinct objects rotation settings live on."""
+    return sorted({path for path, _prop, _kind in ROTATION_PROPERTIES.values()})
+
+
+def read_rotation(client):
+    """Current values of every rotation object, as ``{path: {prop: value}}``."""
+    return dict((path, client.get(path)) for path in rotation_paths())
+
+
+def plan_rotation(rotation, actual):
+    """Actions needed to reach the requested rotation settings.
+
+    Pure. `actual` is :func:`read_rotation` output.
+    """
+    actions = []
+    for key in sorted(rotation or {}):
+        path, prop, _kind = ROTATION_PROPERTIES[key]
+        want = normalise_scalar(rotation[key])
+        properties = actual.get(path, {})
+        if prop not in properties:
+            actions.append(Action(
+                "blocked_absent_property",
+                "rotation.%s maps to %s.%s, which this device does not expose. "
+                "Writing it would be accepted and ignored." % (key, path, prop),
+                detail={"setting": key, "path": path, "property": prop}))
+            continue
+        if normalise_scalar(properties.get(prop, "")) != want:
+            actions.append(Action(
+                "rotation_set",
+                "set %s.%s: %s -> %s"
+                % (path, prop, properties.get(prop, ""), want),
+                detail={"setting": key, "path": path, "property": prop,
+                        "from": normalise_scalar(properties.get(prop, "")),
+                        "to": want}))
+    return actions
+
+
+def apply_rotation(client, actions):
+    """Execute rotation actions. Verify with :func:`verify_rotation` after."""
+    for action in actions:
+        if action.kind != "rotation_set":
+            continue
+        client.set(action.detail["path"], [(action.detail["property"],
+                                            action.detail["to"])])
+
+
+def verify_rotation(client, rotation):
+    """Re-read and assert the rotation settings actually took."""
+    actual = read_rotation(client)
+    problems = []
+    for key, value in (rotation or {}).items():
+        path, prop, _kind = ROTATION_PROPERTIES[key]
+        have = actual.get(path, {}).get(prop, "")
+        if normalise_scalar(have) != normalise_scalar(value):
+            problems.append("%s.%s is %r, wanted %r" % (path, prop, have, value))
+    if problems:
+        raise SapV2VerifyError(
+            "rotation read-back failed. SapV2 never reports a rejected write, "
+            "so these were sent and silently did not take: %s"
+            % "; ".join(problems))
+    return actual
+
+
+def rotation_writes(rotation):
+    """``[(path, property, value)]`` this module intends to write.
+
+    Used to check the startup script for values it will undo at reboot.
+    """
+    out = []
+    for key in sorted(rotation or {}):
+        path, prop, _kind = ROTATION_PROPERTIES[key]
+        out.append((path, prop, normalise_scalar(rotation[key])))
+    return out

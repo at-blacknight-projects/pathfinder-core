@@ -6,10 +6,13 @@
 
 PathfinderCore's own Advanced options page is not one subtree. It writes
 individual properties on the ROOT objects of many: ``Devices#0``,
-``Routers#0``, ``Clustering#0``, ``LogicFlows#0``, ``Logs#0``,
-``MemorySlots#0``, ``UserPanels#0`` and ``System#0.FloatingIps#0``. Log
-rotation lives here too, which is why rotation is not a module of its own -
-splitting it out would leave two modules writing the same four properties.
+``Routers#0``, ``Clustering#0``, ``LogicFlows#0``, ``MemorySlots#0``,
+``UserPanels#0`` and ``System#0.FloatingIps#0``.
+
+The page also covers log rotation, and this module deliberately does NOT.
+Those properties live under ``Logs#0``, and the rule here is that each
+reconciler owns a subtree - so they belong to ``pfc_logs``. Claiming them
+here as well would put two modules on the same properties.
 
 Why an explicit (path, property) allow-list
 -------------------------------------------
@@ -88,21 +91,11 @@ class Option(object):
 #: Access values are from `rfs` against a Core PRO; re-run pfc_survey after a
 #: firmware upgrade rather than trusting them indefinitely.
 OPTIONS = [
-    # ── Log rotation and cleanup ────────────────────────────────────────────
-    Option("rotate_max_file_size", "Logs#0.LogRotator#0.RotateRule#0",
-           "MaxFileSize", RW, "num", vendor_default=1,
-           note="Rotate once a log file reaches this size."),
-    Option("rotate_max_count", "Logs#0.LogRotator#0.RotateRule#0",
-           "MaxCount", RW, "num", vendor_default=3,
-           note="How many rotated files to retain."),
-    Option("check_rotation_after_max_writes", "Logs#0",
-           "CheckRotationAfterMaxWrites", RW, "num", vendor_default=250),
-    Option("skip_clean_logs", "Logs#0", "SkipCleanLogs", RW, "bool",
-           vendor_default=False),
-    Option("minutes_between_search", "Logs#0.LogRotator#0",
-           "MinutesBetweenSearch", RW, "num",
-           note="Not on the vendor's Advanced options page, but the same "
-                "rotation cycle, and nothing else manages it."),
+    # Log rotation and cleanup are NOT here. Every one of those properties
+    # lives under Logs#0, and each reconciler owns a subtree - so they belong
+    # to pfc_logs, via its `rotation` parameter. Listing them here as well
+    # would put two modules on the same properties, which is the conflict this
+    # module was meant to avoid rather than cause.
 
     # ── Devices ─────────────────────────────────────────────────────────────
     Option("lwrp_ver_polling_only", "Devices#0", "LwrpVerPollingOnly", RW,
@@ -297,30 +290,17 @@ def render_state(desired, actual):
     }
 
 
-def conflicts_with_startup_script(desired, startup_script):
-    """Requested values the device's startup script will undo at reboot.
+def intended_writes(desired):
+    """``[(path, property, value)]`` this module would write.
 
-    The Advanced options page is a list of API commands replayed at boot. It
-    is per-host, editable in the GUI, and unreachable over SapV2, so the
-    module cannot read it and cannot change it. Where the caller supplies it,
-    this reports the overlap.
-
-    Measured the hard way: rotation values surviving a reboot looked like
-    persistence, but the host's script simply set the same numbers. A
-    different value would have been reverted.
+    Handed to the startup-script checker, which works on raw commands rather
+    than on this module's option names - so it also covers script lines for
+    settings this module knows nothing about.
     """
-    problems = []
+    out = []
     for key in sorted(desired or {}):
-        if key not in (startup_script or {}):
+        option = OPTIONS_BY_KEY.get(key)
+        if option is None:
             continue
-        want = normalise(desired[key])
-        boot = normalise(startup_script[key])
-        if want != boot:
-            option = OPTIONS_BY_KEY.get(key)
-            where = "%s.%s" % (option.path, option.prop) if option else key
-            problems.append(
-                "%s will be set to %s now, but the device's Advanced options "
-                "startup script sets %s to %s, so it reverts at the next "
-                "reboot. Edit the script too if this must persist."
-                % (key, want, where, boot))
-    return problems
+        out.append((option.path, option.prop, normalise(desired[key])))
+    return out

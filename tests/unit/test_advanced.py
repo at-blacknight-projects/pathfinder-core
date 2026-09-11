@@ -13,6 +13,26 @@ import unittest
 from loader import advanced
 
 
+class TestRotationLivesInPfcLogs(unittest.TestCase):
+    """Rotation is under Logs#0, so pfc_logs owns it.
+
+    The vendor's Advanced options page covers rotation, but each reconciler
+    owns a subtree - so listing it here as well would put two modules on the
+    same properties, which is the conflict this module was meant to avoid
+    rather than cause.
+    """
+
+    def test_no_logs_subtree_options_remain_here(self):
+        self.assertEqual(
+            [o.key for o in advanced.OPTIONS if o.path.startswith("Logs#0")], [])
+
+    def test_rotation_keys_are_gone(self):
+        for key in ("rotate_max_file_size", "rotate_max_count",
+                    "skip_clean_logs", "check_rotation_after_max_writes",
+                    "minutes_between_search"):
+            self.assertNotIn(key, advanced.OPTIONS_BY_KEY, key)
+
+
 class TestVendorListMismatches(unittest.TestCase):
     def test_read_only_option_is_rejected(self):
         problems = advanced.validate({"floating_ips_use_unicast": True})
@@ -40,107 +60,62 @@ class TestValidation(unittest.TestCase):
         self.assertTrue(advanced.validate({"nope": 1}))
 
     def test_non_numeric_for_a_numeric_option(self):
-        self.assertTrue(advanced.validate({"rotate_max_count": "abc"}))
+        self.assertTrue(advanced.validate({"fp_stat_poll_rate": "abc"}))
 
     def test_a_good_request_passes(self):
         self.assertEqual(advanced.validate(
-            {"rotate_max_count": 3, "rotate_max_file_size": 1,
-             "skip_clean_logs": False, "minutes_between_search": 15}), [])
+            {"fp_stat_poll_rate": 15000, "skip_sanity_poll": False,
+             "use_staged_writes": True}), [])
 
 
 class TestMissingProperties(unittest.TestCase):
     """Caught against the device's own read, not the module's table."""
 
     def test_absent_property_is_reported(self):
-        actual = {"Logs#0.LogRotator#0.RotateRule#0": {}}
-        missing = advanced.missing_properties({"rotate_max_count": 3}, actual)
+        missing = advanced.missing_properties(
+            {"fp_stat_poll_rate": 1}, {"Devices#0": {}})
         self.assertEqual(len(missing), 1)
         self.assertIn("does not expose", missing[0])
 
     def test_present_property_is_not_reported(self):
-        actual = {"Logs#0.LogRotator#0.RotateRule#0": {"MaxCount": "10"}}
-        self.assertEqual(
-            advanced.missing_properties({"rotate_max_count": 3}, actual), [])
+        self.assertEqual(advanced.missing_properties(
+            {"fp_stat_poll_rate": 1},
+            {"Devices#0": {"FpStatPollRate": "15000"}}), [])
 
 
 class TestPlan(unittest.TestCase):
     ACTUAL = {
-        "Logs#0.LogRotator#0.RotateRule#0": {"MaxCount": "10", "MaxFileSize": "100"},
-        "Logs#0": {"SkipCleanLogs": "False", "CheckRotationAfterMaxWrites": "250"},
+        "Devices#0": {"FpStatPollRate": "15000", "LwrpVerPollingOnly": "False"},
+        "Routers#0": {"SkipSanityPoll": "False"},
     }
 
     def test_only_differences_are_planned(self):
         changes = advanced.plan(
-            {"rotate_max_count": 3, "rotate_max_file_size": 100}, self.ACTUAL)
-        self.assertEqual([c[0] for c in changes], ["rotate_max_count"])
-        self.assertEqual(changes[0][2:], ("10", "3"))
+            {"fp_stat_poll_rate": 9000, "skip_sanity_poll": False}, self.ACTUAL)
+        self.assertEqual([c[0] for c in changes], ["fp_stat_poll_rate"])
+        self.assertEqual(changes[0][2:], ("15000", "9000"))
 
     def test_booleans_compare_the_way_the_device_reports_them(self):
-        self.assertEqual(advanced.plan({"skip_clean_logs": False}, self.ACTUAL), [])
+        self.assertEqual(advanced.plan({"skip_sanity_poll": False}, self.ACTUAL), [])
         self.assertEqual(
-            [c[0] for c in advanced.plan({"skip_clean_logs": True}, self.ACTUAL)],
-            ["skip_clean_logs"])
+            [c[0] for c in advanced.plan({"skip_sanity_poll": True}, self.ACTUAL)],
+            ["skip_sanity_poll"])
 
     def test_numbers_compare_as_strings_not_types(self):
+        self.assertEqual(advanced.plan({"fp_stat_poll_rate": 15000}, self.ACTUAL), [])
+
+
+class TestIntendedWrites(unittest.TestCase):
+    """Rendered for the startup-script checker, which works on raw commands."""
+
+    def test_rendered_as_path_property_value_triples(self):
         self.assertEqual(
-            advanced.plan({"check_rotation_after_max_writes": 250}, self.ACTUAL), [])
+            advanced.intended_writes({"fp_stat_poll_rate": 9000}),
+            [("Devices#0", "FpStatPollRate", "9000")])
 
-
-class TestRotationIsHereNotInItsOwnModule(unittest.TestCase):
-    """All five rotation knobs live here, so nothing else can fight them."""
-
-    def test_every_rotation_knob_is_present_and_writable(self):
-        for key in ("rotate_max_file_size", "rotate_max_count",
-                    "check_rotation_after_max_writes", "skip_clean_logs",
-                    "minutes_between_search"):
-            self.assertTrue(advanced.OPTIONS_BY_KEY[key].writable, key)
-
-    def test_ready_is_deliberately_absent(self):
-        # Toggling it does not restart anything and the one direction that
-        # acts disables the service.
-        self.assertNotIn("ready", advanced.OPTIONS_BY_KEY)
-        for option in advanced.OPTIONS:
-            self.assertNotEqual(option.prop, "Ready")
+    def test_unknown_keys_are_skipped(self):
+        self.assertEqual(advanced.intended_writes({"nope": 1}), [])
 
 
 if __name__ == "__main__":
     unittest.main()
-
-
-class TestStartupScriptConflicts(unittest.TestCase):
-    """The startup script replays at boot and SapV2 cannot change it.
-
-    Measured the hard way: rotation values surviving a reboot looked like
-    persistence, but that host's script simply set the same numbers. A
-    different value would have been reverted.
-    """
-
-    SCRIPT = {"rotate_max_file_size": 100, "rotate_max_count": 10,
-              "skip_clean_logs": False}
-
-    def test_disagreement_is_reported(self):
-        out = advanced.conflicts_with_startup_script(
-            {"rotate_max_file_size": 1}, self.SCRIPT)
-        self.assertEqual(len(out), 1)
-        self.assertIn("reverts at the next reboot", out[0])
-        self.assertIn("MaxFileSize", out[0])
-
-    def test_agreement_is_not_reported(self):
-        self.assertEqual(advanced.conflicts_with_startup_script(
-            {"rotate_max_file_size": 100}, self.SCRIPT), [])
-
-    def test_option_absent_from_the_script_is_not_reported(self):
-        self.assertEqual(advanced.conflicts_with_startup_script(
-            {"minutes_between_search": 12}, self.SCRIPT), [])
-
-    def test_no_script_supplied_means_unchecked_not_safe(self):
-        # Empty result here means "not checked" - the caller must not read it
-        # as proof that nothing reverts.
-        self.assertEqual(advanced.conflicts_with_startup_script(
-            {"rotate_max_file_size": 1}, {}), [])
-
-    def test_boolean_and_numeric_forms_compare_correctly(self):
-        self.assertEqual(advanced.conflicts_with_startup_script(
-            {"skip_clean_logs": False}, self.SCRIPT), [])
-        self.assertEqual(len(advanced.conflicts_with_startup_script(
-            {"skip_clean_logs": True}, self.SCRIPT)), 1)

@@ -46,15 +46,22 @@ options:
     description: Password for I(username). Falls back to C(PFC_PASS).
     type: str
     required: true
-  startup_script_options:
+  startup_script:
     description:
-      - What the device's Advanced options startup script sets, keyed by the
-        same option names. Optional, and purely advisory - the module cannot
-        read the script, so this is the only way it can know.
-      - Where a requested value disagrees with the script, the module warns
-        that the change will be reverted at the next reboot. It still applies
-        it, because the immediate effect is usually what was wanted.
-    type: dict
+      - The device's Advanced options script, as raw command lines copied from
+        the GUI. Optional, and the only way the module can know its contents -
+        the script is not reachable over SapV2.
+      - Raw lines rather than a mapping, because the script is not a settings
+        form. It carries more than one verb and parameter names that are not
+        property names, so a mapping keyed on this module's option names would
+        silently drop everything else.
+      - Supplying it produces three things - a warning for each requested value
+        the script will revert, a boot-versus-live drift report covering every
+        line rather than only the modelled options, and a list of script lines
+        targeting properties the device does not expose, which therefore do
+        nothing on every boot.
+    type: list
+    elements: str
   options:
     description:
       - Desired values, keyed by option name. Omitted options are left alone -
@@ -92,7 +99,7 @@ notes:
     relying on this module to hold a value. If the option appears there, treat
     a change here as temporary and edit the script too. If it does not appear
     there, whether it persists is still unmeasured."
-  - "Supply I(startup_script_options) to have the module tell you which of
+  - "Supply I(startup_script) to have the module tell you which of
     your requested changes will be undone at the next reboot, rather than
     discovering it after one."
   - C(Ready) on the service roots is deliberately not exposed. Toggling it does
@@ -130,6 +137,22 @@ EXAMPLES = r"""
       rotate_max_file_size: 100
       rotate_max_count: 10
   # => warns that both revert at the next reboot, and applies them anyway
+
+- name: Audit the startup script against what the device is actually running
+  at_blacknight.pathfinder_core.pfc_advanced_options:
+    host: "{{ inventory_hostname }}"
+    username: "{{ pfc_username }}"
+    password: "{{ pfc_password }}"
+    startup_script: "{{ pfc_startup_script }}"
+  register: adv
+
+- name: Lines whose value does not match the live device
+  ansible.builtin.debug:
+    var: adv.startup_script_drift
+
+- name: Lines that do nothing at all, every boot
+  ansible.builtin.debug:
+    var: adv.startup_script_absent
 
 - name: Keep more, smaller log files
   at_blacknight.pathfinder_core.pfc_advanced_options:
@@ -178,12 +201,31 @@ durable:
   type: str
 will_revert_at_reboot:
   description:
-    - Warnings for requested values that disagree with
-      I(startup_script_options). Empty when none were supplied, which means
-      "not checked", NOT "nothing will revert".
+    - Warnings for requested values the startup script will undo. Empty when
+      no I(startup_script) was supplied, which means "not checked", NOT
+      "nothing will revert".
   returned: always
   type: list
   elements: str
+startup_script_drift:
+  description:
+    - Script lines whose value differs from what the device currently holds,
+      covering every line rather than only the modelled options.
+  returned: always
+  type: list
+  elements: dict
+startup_script_absent:
+  description:
+    - Script lines targeting a property the device does not expose. These do
+      nothing on every boot and are otherwise invisible.
+  returned: always
+  type: list
+  elements: dict
+startup_script_unparsed:
+  description: Script lines that could not be interpreted, with the reason.
+  returned: always
+  type: list
+  elements: dict
 """
 
 from ansible.module_utils.basic import AnsibleModule, env_fallback
@@ -195,6 +237,7 @@ from ansible_collections.at_blacknight.pathfinder_core.plugins.module_utils.sapv
 )
 from ansible_collections.at_blacknight.pathfinder_core.plugins.module_utils import (
     advanced,
+    startup as startup_script,
 )
 
 
@@ -208,7 +251,7 @@ def main():
             password=dict(type="str", required=True, no_log=True,
                           fallback=(env_fallback, ["PFC_PASS"])),
             options=dict(type="dict"),
-            startup_script_options=dict(type="dict"),
+            startup_script=dict(type="list", elements="str"),
             idle_timeout=dict(type="float", default=1.5),
             read_timeout=dict(type="float", default=15.0),
         ),
@@ -235,7 +278,9 @@ def main():
     # Runtime-only: the Advanced options startup script replays at boot and
     # cannot be read or written over SapV2, so any option it sets will revert.
     result = {"changed": False, "plan": [], "report": {},
-              "durable": "runtime_only", "will_revert_at_reboot": []}
+              "durable": "runtime_only", "will_revert_at_reboot": [],
+              "startup_script_unparsed": [], "startup_script_drift": [],
+              "startup_script_absent": []}
 
     try:
         client.connect(module.params["username"], module.params["password"])
@@ -256,8 +301,21 @@ def main():
         # Warn where the startup script will undo this at the next reboot.
         # Applied anyway: the immediate effect is normally the point, and
         # failing would be worse than saying so clearly.
-        script = module.params["startup_script_options"] or {}
-        reverting = advanced.conflicts_with_startup_script(wanted, script)
+        commands, unparsed = startup_script.parse_script(
+            module.params["startup_script"])
+        result["startup_script_unparsed"] = [
+            {"line": line, "reason": reason} for line, reason in unparsed]
+        for line, reason in unparsed:
+            module.warn("unparsed startup script line (%s): %s" % (reason, line))
+
+        # Boot-state vs live-state, for every line in the script - not just
+        # the options this module knows about. Absent-property lines are the
+        # ones that silently do nothing on every boot.
+        drift, absent = startup_script.boot_vs_live(commands, actual)
+        result["startup_script_drift"] = drift
+        result["startup_script_absent"] = absent
+
+        reverting = startup_script.conflicts(advanced.intended_writes(wanted), commands)
         result["will_revert_at_reboot"] = reverting
         for warning in reverting:
             module.warn(warning)
