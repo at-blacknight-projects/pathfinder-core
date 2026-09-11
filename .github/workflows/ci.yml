@@ -1,7 +1,7 @@
 ---
 name: CI
 
-# Release channels come from atb-ci's own semantic-release config: main is the
+# Release channels come from atb-ci's semantic-release config: main is the
 # stable channel, and rc/uat/dev/alpha are prerelease channels.
 on:
   push:
@@ -46,9 +46,9 @@ jobs:
       - name: Install ansible-core
         run: pip install 'ansible-core>=2.16,<2.17'
 
-      # Catches things unit tests cannot: invalid DOCUMENTATION YAML (which
-      # makes a module's docs unusable), argument_spec and documentation
-      # disagreeing, CRLF line endings, and executable bits on modules.
+      # Catches what unit tests cannot: invalid DOCUMENTATION YAML (which makes
+      # a module's docs unusable), argument_spec and documentation disagreeing,
+      # CRLF line endings, and executable bits on modules.
       - name: Run sanity tests
         working-directory: ansible_collections/at_blacknight/pathfinder_core
         run: ansible-test sanity --local --python 3.12
@@ -71,19 +71,64 @@ jobs:
       - name: Build collection artifact
         run: ansible-galaxy collection build --force
 
+  # ── Release ────────────────────────────────────────────────────────────────
+  # atb-ci's stages are composed directly rather than going through its
+  # no-build-release wrapper. The wrapper forwards `replacement-files` (a JSON
+  # array) into `git-commit-files`, which stage-release-semantic interpolates
+  # as a bare string: the inner quotes are lost and the asset becomes the glob
+  # `[galaxy.yml]`, a character class that matches no file. The replacement
+  # then happens, uploads, restores, and is silently dropped from the release
+  # commit. Passing `git-commit-files` a plain path here avoids that entirely.
+  version:
+    name: Detect version
+    needs: [units, sanity, build]
+    if: github.event_name == 'push'
+    uses: at-blacknight/atb-ci/.github/workflows/stage-version-detect.yml@v0.1.1
+    with:
+      upload-artifacts: false
+
+  stamp-version:
+    name: Stamp version into galaxy.yml
+    needs: version
+    if: needs.version.outputs.would-release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # galaxy.yml carries a hardcoded `version:` that MUST equal the release
+      # tag. Left unstamped, `ansible-galaxy collection install` resolves a tag
+      # whose artifact then declares a different version.
+      - name: Stamp version
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          test -n "$VERSION"
+          sed -i -E "s|^version:.*|version: ${VERSION}|" galaxy.yml
+          grep -E "^version:" galaxy.yml
+          # Fail loudly rather than release a mismatched artifact.
+          grep -qx "version: ${VERSION}" galaxy.yml
+
+      # stage-release-semantic restores everything under ./artifacts to the
+      # repository root before running semantic-release, so the layout here
+      # must mirror the repo layout.
+      - name: Upload stamped galaxy.yml
+        uses: actions/upload-artifact@v4
+        with:
+          name: text-replace-galaxy
+          path: galaxy.yml
+          retention-days: 5
+
   release:
     name: Release
-    needs: [units, sanity, build]
-    # Never release from a pull request; the checks above are the PR value.
-    if: github.event_name == 'push'
+    needs: [version, stamp-version]
+    if: needs.version.outputs.would-release == 'true'
     permissions:
       contents: write
-    uses: at-blacknight/atb-ci/.github/workflows/no-build-release.yml@v0.1.1
+    uses: at-blacknight/atb-ci/.github/workflows/stage-release-semantic.yml@v0.1.1
     with:
-      # galaxy.yml carries a hardcoded `version:` that MUST match the release
-      # tag, or `ansible-galaxy collection install` resolves a tag whose
-      # artifact declares a different version. atb-ci's text replacement keeps
-      # them in step and commits the result alongside the changelog.
-      enable-text-replacement: true
-      replacement-files: '["galaxy.yml"]'
-      replacement-specs: '[{"pattern": "^version: .*", "replacement": "version: {{version}}"}]'
+      download-artifacts: true
+      artifact-pattern: 'text-replace-*'
+      # A plain path, not a JSON array — this is what the stage expects, and
+      # it lands in the @semantic-release/git assets alongside the changelog.
+      git-commit-files: 'galaxy.yml'
