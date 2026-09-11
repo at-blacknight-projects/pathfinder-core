@@ -138,3 +138,37 @@ class TestConflicts(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestScriptPathsMustBeRead(unittest.TestCase):
+    """boot_vs_live only checks paths it was given, so the caller must read
+    every path the SCRIPT mentions - not just the ones it models itself.
+
+    Getting this wrong is silent: the drift report simply comes back empty for
+    everything the caller did not happen to read, which looks identical to
+    "no drift".
+    """
+
+    def test_unread_paths_yield_no_drift_even_when_they_differ(self):
+        commands, _unused = startup.parse_script(
+            ["SET Logs#0.LogRotator#0.RotateRule#0 MaxFileSize=90"])
+        # Caller read some other object entirely.
+        drift, absent = startup.boot_vs_live(commands, {"Devices#0": {"X": "1"}})
+        self.assertEqual((drift, absent), ([], []))
+
+    def test_reading_the_scripts_own_paths_finds_the_drift(self):
+        commands, _unused = startup.parse_script(
+            ["SET Logs#0.LogRotator#0.RotateRule#0 MaxFileSize=90"])
+        live = {"Logs#0.LogRotator#0.RotateRule#0": {"MaxFileSize": "100"}}
+        drift, _absent = startup.boot_vs_live(commands, live)
+        self.assertEqual([(d["live"], d["script"]) for d in drift], [("100", "90")])
+
+    def test_property_paths_are_discoverable_from_the_commands(self):
+        # This is what the module uses to decide what to read.
+        commands, _unused = startup.parse_script(REAL)
+        paths = {c.path for c in commands if c.is_property}
+        self.assertIn("Logs#0.LogRotator#0.RotateRule#0", paths)
+        self.assertIn("UserPanels#0", paths)
+        # The NOP line's object is excluded: its name is not a property.
+        self.assertNotIn(
+            "Devices#0.EndpointDiscoverers#0.LivewireEndpointDiscovery", paths)

@@ -285,24 +285,34 @@ def main():
     try:
         client.connect(module.params["username"], module.params["password"])
 
-        # Read every distinct object once, rather than once per option.
+        commands, unparsed = startup_script.parse_script(
+            module.params["startup_script"])
+
+        # Read every distinct object once, rather than once per option - and
+        # include the objects the SCRIPT mentions, not just the ones this
+        # module models. boot_vs_live deliberately skips a path it was not
+        # given rather than guessing, so reading only the modelled paths would
+        # silently leave most of the script unchecked. That is the opposite of
+        # the point: script lines for subtrees owned by other modules (all the
+        # Logs#0 rotation lines, for instance) are exactly the ones nothing
+        # else looks at.
+        paths = {o.path for o in advanced.OPTIONS}
+        paths.update(c.path for c in commands if c.is_property)
         actual = {}
-        for path in sorted({o.path for o in advanced.OPTIONS}):
+        for path in sorted(paths):
             actual[path] = client.get(path)
 
         # Refuse anything the device does not actually expose, measured
         # against this device rather than against the module's own table.
-        absent = advanced.missing_properties(wanted, actual)
-        if absent:
+        unsupported = advanced.missing_properties(wanted, actual)
+        if unsupported:
             result["report"] = advanced.report(actual)
             module.fail_json(msg="unsupported on this device: %s"
-                                 % "; ".join(absent), **result)
+                                 % "; ".join(unsupported), **result)
 
         # Warn where the startup script will undo this at the next reboot.
         # Applied anyway: the immediate effect is normally the point, and
         # failing would be worse than saying so clearly.
-        commands, unparsed = startup_script.parse_script(
-            module.params["startup_script"])
         result["startup_script_unparsed"] = [
             {"line": line, "reason": reason} for line, reason in unparsed]
         for line, reason in unparsed:
