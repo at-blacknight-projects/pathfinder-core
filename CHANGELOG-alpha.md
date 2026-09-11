@@ -1,3 +1,15 @@
+## [0.1.0-alpha.6](https://github.com/at-blacknight-projects/pathfinder-core/compare/v0.1.0-alpha.5...v0.1.0-alpha.6) (2026-09-11)
+
+
+### Features
+
+* **logs,advanced:** return a diff so --check --diff shows the change ([74ec80d](https://github.com/at-blacknight-projects/pathfinder-core/commit/74ec80d809e39f8e31f698c3f376d1829e0b4372))
+
+
+### Bug Fixes
+
+* **advanced:** changes are runtime-only; the startup script wins at reboot ([cbf6b3a](https://github.com/at-blacknight-projects/pathfinder-core/commit/cbf6b3aba4ace27e7cc9a9028c588b912288dbfc)), closes [Logs#0](https://github.com/at-blacknight-projects/Logs/issues/0) [.LogRotator#0](https://github.com/at-blacknight-projects/.LogRotator/issues/0) [.RotateRule#0](https://github.com/at-blacknight-projects/.RotateRule/issues/0)
+
 ## [0.1.0-alpha.5](https://github.com/at-blacknight-projects/pathfinder-core/compare/v0.1.0-alpha.4...v0.1.0-alpha.5) (2026-09-11)
 
 
