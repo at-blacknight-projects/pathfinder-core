@@ -105,3 +105,42 @@ class TestRotationIsHereNotInItsOwnModule(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestStartupScriptConflicts(unittest.TestCase):
+    """The startup script replays at boot and SapV2 cannot change it.
+
+    Measured the hard way: rotation values surviving a reboot looked like
+    persistence, but that host's script simply set the same numbers. A
+    different value would have been reverted.
+    """
+
+    SCRIPT = {"rotate_max_file_size": 100, "rotate_max_count": 10,
+              "skip_clean_logs": False}
+
+    def test_disagreement_is_reported(self):
+        out = advanced.conflicts_with_startup_script(
+            {"rotate_max_file_size": 1}, self.SCRIPT)
+        self.assertEqual(len(out), 1)
+        self.assertIn("reverts at the next reboot", out[0])
+        self.assertIn("MaxFileSize", out[0])
+
+    def test_agreement_is_not_reported(self):
+        self.assertEqual(advanced.conflicts_with_startup_script(
+            {"rotate_max_file_size": 100}, self.SCRIPT), [])
+
+    def test_option_absent_from_the_script_is_not_reported(self):
+        self.assertEqual(advanced.conflicts_with_startup_script(
+            {"minutes_between_search": 12}, self.SCRIPT), [])
+
+    def test_no_script_supplied_means_unchecked_not_safe(self):
+        # Empty result here means "not checked" - the caller must not read it
+        # as proof that nothing reverts.
+        self.assertEqual(advanced.conflicts_with_startup_script(
+            {"rotate_max_file_size": 1}, {}), [])
+
+    def test_boolean_and_numeric_forms_compare_correctly(self):
+        self.assertEqual(advanced.conflicts_with_startup_script(
+            {"skip_clean_logs": False}, self.SCRIPT), [])
+        self.assertEqual(len(advanced.conflicts_with_startup_script(
+            {"skip_clean_logs": True}, self.SCRIPT)), 1)

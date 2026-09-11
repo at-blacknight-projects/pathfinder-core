@@ -295,3 +295,32 @@ def render_state(desired, actual):
         "before_header": "advanced options",
         "after_header": "advanced options",
     }
+
+
+def conflicts_with_startup_script(desired, startup_script):
+    """Requested values the device's startup script will undo at reboot.
+
+    The Advanced options page is a list of API commands replayed at boot. It
+    is per-host, editable in the GUI, and unreachable over SapV2, so the
+    module cannot read it and cannot change it. Where the caller supplies it,
+    this reports the overlap.
+
+    Measured the hard way: rotation values surviving a reboot looked like
+    persistence, but the host's script simply set the same numbers. A
+    different value would have been reverted.
+    """
+    problems = []
+    for key in sorted(desired or {}):
+        if key not in (startup_script or {}):
+            continue
+        want = normalise(desired[key])
+        boot = normalise(startup_script[key])
+        if want != boot:
+            option = OPTIONS_BY_KEY.get(key)
+            where = "%s.%s" % (option.path, option.prop) if option else key
+            problems.append(
+                "%s will be set to %s now, but the device's Advanced options "
+                "startup script sets %s to %s, so it reverts at the next "
+                "reboot. Edit the script too if this must persist."
+                % (key, want, where, boot))
+    return problems

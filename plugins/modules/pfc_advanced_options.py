@@ -46,6 +46,15 @@ options:
     description: Password for I(username). Falls back to C(PFC_PASS).
     type: str
     required: true
+  startup_script_options:
+    description:
+      - What the device's Advanced options startup script sets, keyed by the
+        same option names. Optional, and purely advisory - the module cannot
+        read the script, so this is the only way it can know.
+      - Where a requested value disagrees with the script, the module warns
+        that the change will be reverted at the next reboot. It still applies
+        it, because the immediate effect is usually what was wanted.
+    type: dict
   options:
     description:
       - Desired values, keyed by option name. Omitted options are left alone -
@@ -66,22 +75,26 @@ options:
     type: float
     default: 15.0
 notes:
-  - "DURABILITY - measured across a real reboot, with one caveat. The Advanced
-    options page is a script of API commands the device runs at startup, and
-    that script is not reachable over SapV2, so there was a real possibility
-    that a value set here would be stamped back at boot. It is not. On a Core
-    PRO rebooted with C(StartupFileProcessed) going True, rotation values that
-    differ from the vendor's documented defaults (C(MaxFileSize) 100 against a
-    default of 1, C(MaxCount) 10 against 3) survived unchanged, along with
-    every other option in this module. So the startup script ran and did not
-    reassert the defaults."
-  - "The caveat: that proves the values on THAT host survive, which is
-    consistent either with the device persisting them or with that host's
-    startup script carrying the same values. It does not prove that a value
-    this module writes for the first time will survive. The airtight test is
-    to set a novel value and reboot again. Until then C(durable) reports
-    C(observed) rather than C(guaranteed), and anything that absolutely must
-    survive a reboot should also be set in the startup script."
+  - "CHANGES ARE RUNTIME-ONLY AND WILL REVERT AT REBOOT for any option the
+    device's Advanced options script sets. That script is a list of API
+    commands the device replays at startup, it is per-host and editable in the
+    GUI, and it is NOT reachable over SapV2 - there is no startup-file object
+    anywhere in the tree. So this module changes the live value, verifies it,
+    and cannot change the script."
+  - "This was measured, and the first reading of it was wrong. Across a real
+    reboot, rotation values differing from the vendor's factory defaults
+    (C(MaxFileSize) 100 against a factory 1) survived - which looked like
+    persistence. It was not: that host's Advanced options script contains
+    C(SET Logs#0.LogRotator#0.RotateRule#0 MaxFileSize=100) explicitly, so the
+    script reasserted the same number. Setting a DIFFERENT value would have
+    been reverted."
+  - "Practical consequence. Read the device's Advanced options page before
+    relying on this module to hold a value. If the option appears there, treat
+    a change here as temporary and edit the script too. If it does not appear
+    there, whether it persists is still unmeasured."
+  - "Supply I(startup_script_options) to have the module tell you which of
+    your requested changes will be undone at the next reboot, rather than
+    discovering it after one."
   - C(Ready) on the service roots is deliberately not exposed. Toggling it does
     not restart anything, and the one direction that does something disables
     the service.
@@ -102,6 +115,21 @@ EXAMPLES = r"""
     msg: "{{ adv.report | dict2items
              | selectattr('key', 'search', 'rotat|clean|minutes')
              | list }}"
+
+- name: Change rotation, and be told what the startup script will undo
+  at_blacknight.pathfinder_core.pfc_advanced_options:
+    host: "{{ inventory_hostname }}"
+    username: "{{ pfc_username }}"
+    password: "{{ pfc_password }}"
+    options:
+      rotate_max_file_size: 1
+      rotate_max_count: 3
+    # Transcribed from the device's Advanced options page. The module cannot
+    # read it, so this is the only way it can warn you.
+    startup_script_options:
+      rotate_max_file_size: 100
+      rotate_max_count: 10
+  # => warns that both revert at the next reboot, and applies them anyway
 
 - name: Keep more, smaller log files
   at_blacknight.pathfinder_core.pfc_advanced_options:
@@ -143,12 +171,19 @@ report:
   type: dict
 durable:
   description:
-    - Always C(observed). Values in this module were seen to survive a real
-      reboot on a Core PRO whose startup file was processed, but a
-      first-written novel value has not been reboot-tested; see the module
-      notes.
+    - Always C(runtime_only). The device's Advanced options startup script
+      replays at boot and cannot be read or written over SapV2, so any option
+      it sets reverts; see the module notes.
   returned: always
   type: str
+will_revert_at_reboot:
+  description:
+    - Warnings for requested values that disagree with
+      I(startup_script_options). Empty when none were supplied, which means
+      "not checked", NOT "nothing will revert".
+  returned: always
+  type: list
+  elements: str
 """
 
 from ansible.module_utils.basic import AnsibleModule, env_fallback
@@ -173,6 +208,7 @@ def main():
             password=dict(type="str", required=True, no_log=True,
                           fallback=(env_fallback, ["PFC_PASS"])),
             options=dict(type="dict"),
+            startup_script_options=dict(type="dict"),
             idle_timeout=dict(type="float", default=1.5),
             read_timeout=dict(type="float", default=15.0),
         ),
@@ -196,8 +232,10 @@ def main():
 
     # Not "guaranteed": survival was observed across a real reboot, but only
     # for values the host already had. See the module notes.
+    # Runtime-only: the Advanced options startup script replays at boot and
+    # cannot be read or written over SapV2, so any option it sets will revert.
     result = {"changed": False, "plan": [], "report": {},
-              "durable": "observed"}
+              "durable": "runtime_only", "will_revert_at_reboot": []}
 
     try:
         client.connect(module.params["username"], module.params["password"])
@@ -214,6 +252,15 @@ def main():
             result["report"] = advanced.report(actual)
             module.fail_json(msg="unsupported on this device: %s"
                                  % "; ".join(absent), **result)
+
+        # Warn where the startup script will undo this at the next reboot.
+        # Applied anyway: the immediate effect is normally the point, and
+        # failing would be worse than saying so clearly.
+        script = module.params["startup_script_options"] or {}
+        reverting = advanced.conflicts_with_startup_script(wanted, script)
+        result["will_revert_at_reboot"] = reverting
+        for warning in reverting:
+            module.warn(warning)
 
         changes = advanced.plan(wanted, actual)
         result["plan"] = [
