@@ -1,0 +1,37 @@
+---
+namespace: at_blacknight
+name: pathfinder_core
+version: 0.1.0
+
+readme: README.md
+authors:
+  - Adam Butler <github@at-blacknight.com>
+
+description: >-
+  Manage Telos/Axia PathfinderCore PRO broadcast router-control appliances over
+  their SapV2 API (TCP 9600). Provides a shared SapV2 client and per-subtree
+  reconcilers with read-back verification and an explicit runtime/config
+  boundary.
+
+license_file: LICENSE
+
+tags:
+  - broadcast
+  - telos
+  - axia
+  - pathfinder
+  - sapv2
+  - networking
+
+dependencies: {}
+
+repository: https://github.com/at-blacknight-projects/pathfinder-core-collection
+documentation: https://github.com/at-blacknight-projects/pathfinder-core-collection/tree/main/docs
+homepage: https://github.com/at-blacknight-projects/pathfinder-core-collection
+issues: https://github.com/at-blacknight-projects/pathfinder-core-collection/issues
+
+build_ignore:
+  - .github
+  - .gitignore
+  - tests/output
+  - "*.tar.gz"
