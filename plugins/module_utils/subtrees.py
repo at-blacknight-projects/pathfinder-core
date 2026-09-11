@@ -27,6 +27,16 @@ runtime properties.
 **Default deny.** An unlisted path is refused, not allowed. Adding a subtree is
 a deliberate act that requires writing down why it is safe, which is exactly the
 review moment that a generic "PFC resource" module would skip.
+
+An earlier version carried a per-property allow-list so that service settings
+on the ROOT of a restricted subtree - ``LogicFlows#0.BufferInternalMessages``
+and the like - could be written despite the subtree itself being refused. That
+existed only to support a module that reconciled those properties live, and
+that module was a category error: those settings are lines in the device's
+Advanced options startup script, which the device replays at boot and which is
+managed over HTTP, not SapV2. Writing them live just produced values the next
+restart discarded. With that module gone the allow-list has no callers, so the
+guard is back to plain subtree classification.
 """
 
 from __future__ import absolute_import, division, print_function
@@ -300,26 +310,6 @@ class SubtreeGuard(object):
             return
 
         props = list(properties or [])
-
-        # A subtree's ROOT object is not its children. LogicFlows#0 is
-        # classified PROGRAM because a logic flow is a program - but
-        # LogicFlows#0.BufferInternalMessages is a service tuning knob, and
-        # the same is true of Routers#0.SkipSanityPoll and
-        # Devices#0.LwrpVerPollingOnly. Classifying by subtree alone would
-        # wrongly lock those out.
-        #
-        # So a small, explicitly enumerated set of (path, property) pairs is
-        # permitted regardless of the subtree's classification. This keeps
-        # default-deny intact: each pair is an individually reviewed exception
-        # rather than an opened subtree, and it applies only to `set` and only
-        # when EVERY property in the request is on the list.
-        if verb == "set" and props:
-            try:
-                from .advanced import ALLOWED_PROPERTIES
-            except ImportError:  # pragma: no cover - direct file import
-                from advanced import ALLOWED_PROPERTIES  # type: ignore
-            if all((path, prop) in ALLOWED_PROPERTIES for prop in props):
-                return
 
         subtree = self.classify(path)
         if subtree is None:

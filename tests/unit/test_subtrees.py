@@ -110,68 +110,6 @@ class TestGuardIsEnforcedByTheClient(unittest.TestCase):
         self.assertTrue(client.transcript[0]["skipped"])
 
 
-class TestRootPropertyAllowList(unittest.TestCase):
-    """A subtree's ROOT object is not its children.
-
-    LogicFlows#0 is PROGRAM because a logic flow is a program, but
-    LogicFlows#0.BufferInternalMessages is a service tuning knob. The
-    allow-list lets the second through without opening the first.
-    """
-
-    def setUp(self):
-        self.guard = subtrees.SubtreeGuard()
-
-    def test_service_knob_allowed_on_a_program_subtree(self):
-        self.guard.assert_writable("LogicFlows#0", verb="set",
-                                   properties=["BufferInternalMessages"])
-
-    def test_service_knob_allowed_on_mixed_subtrees(self):
-        self.guard.assert_writable("Routers#0", verb="set",
-                                   properties=["SkipSanityPoll"])
-        self.guard.assert_writable("Devices#0", verb="set",
-                                   properties=["LwrpVerPollingOnly"])
-
-    def test_service_knob_allowed_on_an_unclassified_subtree(self):
-        self.guard.assert_writable("Clustering#0", verb="set",
-                                   properties=["BufferInternalMessages"])
-
-    def test_children_of_those_subtrees_are_still_refused(self):
-        with self.assertRaises(sapv2.SapV2GuardError):
-            self.guard.assert_writable("LogicFlows#0.LogicFlowFolder#X",
-                                       verb="set", properties=["Anything"])
-
-    def test_runtime_property_on_an_allowed_root_is_still_refused(self):
-        with self.assertRaises(sapv2.SapV2GuardError):
-            self.guard.assert_writable("Routers#0.Router#1", verb="set",
-                                       properties=["CurrentSourcePath"])
-
-    def test_destructive_action_on_an_allowed_root_is_still_refused(self):
-        # Clustering#0 has one allow-listed knob, which must not make
-        # LeaveCluster reachable.
-        with self.assertRaises(sapv2.SapV2GuardError):
-            self.guard.assert_writable("Clustering#0", verb="set",
-                                       properties=["LeaveCluster"])
-
-    def test_a_read_only_option_is_not_allow_listed(self):
-        # UseUnicast is on the vendor's own Advanced options list but rfs
-        # reports it RO, so it is excluded from the allow-list.
-        with self.assertRaises(sapv2.SapV2GuardError):
-            self.guard.assert_writable("System#0.FloatingIps#0", verb="set",
-                                       properties=["UseUnicast"])
-
-    def test_mixing_an_allowed_and_an_unlisted_property_is_refused(self):
-        # All-or-nothing: one allow-listed property must not smuggle another
-        # through in the same command.
-        with self.assertRaises(sapv2.SapV2GuardError):
-            self.guard.assert_writable(
-                "LogicFlows#0", verb="set",
-                properties=["BufferInternalMessages", "SomethingElse"])
-
-    def test_delete_is_not_covered_by_the_allow_list(self):
-        with self.assertRaises(sapv2.SapV2GuardError):
-            self.guard.assert_writable("LogicFlows#0", verb="del")
-
-
 class TestBoundaryReport(unittest.TestCase):
     def test_every_entry_states_a_reason(self):
         for row in subtrees.boundary_report():
