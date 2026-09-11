@@ -183,6 +183,38 @@ SUBTREES = [
         "Not assessed.",
     ),
     Subtree(
+        "Clustering#0", UNCLASSIFIED,
+        "Node clustering. BufferInternalMessages and ChangeLocalHostName are "
+        "writable, but the subtree also exposes CreateCluster, JoinCluster, "
+        "LeaveCluster and ManualSync as write-only actions - the most "
+        "destructive operations on the device. Refused as a subtree; the one "
+        "service setting is reachable through the advanced-options allow-list.",
+    ),
+    Subtree(
+        "UserPanels#0", UNCLASSIFIED,
+        "Operator panel presentation. Several writable properties, but the "
+        "panels themselves have not been assessed and WritePanelPage is a "
+        "write-only action. The theme and filter settings are reachable "
+        "through the advanced-options allow-list.",
+    ),
+    Subtree(
+        "LegacyPanels#0", UNCLASSIFIED,
+        "Not assessed. Found by enumerating the root with 'get .'.",
+    ),
+    Subtree(
+        "Meters#0", UNCLASSIFIED,
+        "Audio metering - almost certainly pure runtime telemetry, but not "
+        "measured. Found by enumerating the root.",
+    ),
+    Subtree(
+        "Requests#0", UNCLASSIFIED,
+        "Not assessed. Found by enumerating the root.",
+    ),
+    Subtree(
+        "UpdateModerators#0", UNCLASSIFIED,
+        "Not assessed. Found by enumerating the root.",
+    ),
+    Subtree(
         "TimeEvents#0", UNCLASSIFIED,
         "Scheduled events. Probably declarative, but they fire actions, so "
         "treat as program-adjacent until measured.",
@@ -214,6 +246,11 @@ ACTION_PROPERTIES = frozenset([
     "RemoveDeviceIp", "RotateSource", "SendCriticalMessage",
     "SendLwcpCommand", "SendLwrpCommand", "SubmitSapMessage", "Trigger",
     "WriteSlot", "WriteTimer",
+    # Found when surveying the objects the Advanced options page touches.
+    # The clustering four are the most destructive actions on the device:
+    # LeaveCluster on the wrong node is a genuine outage.
+    "CreateCluster", "JoinCluster", "LeaveCluster", "ManualSync",
+    "FixPanelSecurity", "WritePanelPage",
 ])
 
 
@@ -256,6 +293,28 @@ class SubtreeGuard(object):
 
         if self.allow_all:
             return
+
+        props = list(properties or [])
+
+        # A subtree's ROOT object is not its children. LogicFlows#0 is
+        # classified PROGRAM because a logic flow is a program - but
+        # LogicFlows#0.BufferInternalMessages is a service tuning knob, and
+        # the same is true of Routers#0.SkipSanityPoll and
+        # Devices#0.LwrpVerPollingOnly. Classifying by subtree alone would
+        # wrongly lock those out.
+        #
+        # So a small, explicitly enumerated set of (path, property) pairs is
+        # permitted regardless of the subtree's classification. This keeps
+        # default-deny intact: each pair is an individually reviewed exception
+        # rather than an opened subtree, and it applies only to `set` and only
+        # when EVERY property in the request is on the list.
+        if verb == "set" and props:
+            try:
+                from .advanced import ALLOWED_PROPERTIES
+            except ImportError:  # pragma: no cover - direct file import
+                from advanced import ALLOWED_PROPERTIES  # type: ignore
+            if all((path, prop) in ALLOWED_PROPERTIES for prop in props):
+                return
 
         subtree = self.classify(path)
         if subtree is None:

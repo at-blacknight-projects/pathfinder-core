@@ -99,9 +99,16 @@ OPTIONS = [
     # ── Devices ─────────────────────────────────────────────────────────────
     Option("lwrp_ver_polling_only", "Devices#0", "LwrpVerPollingOnly", RW,
            "bool", vendor_default=False),
-    Option("lwcp_ss", "Devices#0", "LwcpSs", RW, "bool", vendor_default=True),
-    Option("qor_monitor", "Devices#0", "QorMonitor", RW, "bool",
-           vendor_default=True),
+    # On the vendor's list, but ABSENT from Devices#0 on measured firmware -
+    # a read returns nothing at all, so they are not simply read-only, they do
+    # not exist. Marked unmeasured (and therefore not writable) rather than
+    # assumed RW; re-run pfc_survey on newer firmware before promoting them.
+    Option("lwcp_ss", "Devices#0", "LwcpSs", UNMEASURED, "bool",
+           vendor_default=True, supported=False,
+           note="Not present on Devices#0 on measured firmware."),
+    Option("qor_monitor", "Devices#0", "QorMonitor", UNMEASURED, "bool",
+           vendor_default=True, supported=False,
+           note="Not present on Devices#0 on measured firmware."),
     Option("fp_stat_poll_rate", "Devices#0", "FpStatPollRate", RW, "num",
            vendor_default=15000),
 
@@ -125,7 +132,11 @@ OPTIONS = [
 
     # ── User panels ─────────────────────────────────────────────────────────
     Option("default_theme", "UserPanels#0", "DefaultTheme", RW, "text",
-           vendor_default="default"),
+           vendor_default="default",
+           note="RW, but it VALIDATES its value and silently discards an "
+                "unknown one - setting it to an arbitrary string was accepted "
+                "on the wire and left the value unchanged. Read-back "
+                "verification catches this; nothing else would."),
     Option("alpha_filter", "UserPanels#0", "AlphaFilter", RW, "text",
            vendor_default="0.5"),
     Option("use_alpha_filter", "UserPanels#0", "UseAlphaFilter", RW, "text",
@@ -194,6 +205,29 @@ def normalise(value):
     if isinstance(value, bool):
         return "True" if value else "False"
     return str(value).strip()
+
+
+def missing_properties(desired, actual):
+    """Options whose property is absent from the device entirely.
+
+    The vendor's Advanced options list is not firmware-specific: it names
+    settings that simply do not exist on some builds (LwcpSs and QorMonitor
+    are absent from Devices#0 on measured firmware). Writing one is accepted
+    and does nothing. Catching it against the device's own read, rather than
+    against this module's table, keeps that correct on firmware nobody has
+    surveyed yet.
+    """
+    missing = []
+    for key in sorted(desired or {}):
+        option = OPTIONS_BY_KEY.get(key)
+        if option is None:
+            continue
+        if option.prop not in actual.get(option.path, {}):
+            missing.append(
+                "%s maps to %s.%s, which this device does not expose at all. "
+                "Writing it would be accepted and ignored."
+                % (key, option.path, option.prop))
+    return missing
 
 
 def plan(desired, actual):
