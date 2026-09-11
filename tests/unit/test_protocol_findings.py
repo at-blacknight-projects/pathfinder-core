@@ -88,8 +88,17 @@ class TestInertSessionIsDetected(unittest.TestCase):
     """
 
     class FakeSocket(object):
+        """Replies only AFTER a command is sent.
+
+        The client flushes pending bytes before sending, precisely so a late
+        reply to a previous command cannot be read as this one's. A fake that
+        queues its reply up front would have that flush eat it, which is the
+        fake being wrong rather than the client.
+        """
+
         def __init__(self, replies):
-            self.replies = list(replies)
+            self.pending = list(replies)
+            self.ready = []
             self.sent = []
 
         def settimeout(self, _t):
@@ -97,10 +106,12 @@ class TestInertSessionIsDetected(unittest.TestCase):
 
         def sendall(self, data):
             self.sent.append(data)
+            if self.pending:
+                self.ready.append(self.pending.pop(0))
 
         def recv(self, _n):
-            if self.replies:
-                return self.replies.pop(0)
+            if self.ready:
+                return self.ready.pop(0)
             raise sapv2.socket.timeout()
 
         def close(self):
@@ -109,10 +120,11 @@ class TestInertSessionIsDetected(unittest.TestCase):
     def _client(self, replies):
         client = sapv2.SapV2Client(host="unused", idle_timeout=0.01,
                                    read_timeout=0.05)
-        client._sock = self.FakeSocket(replies)
         # connect() would open a real socket; exercise the post-login logic by
-        # calling the same code path with the socket already in place.
-        client._write(sapv2.CRLF)
+        # attaching the socket directly. Nothing is sent here on purpose - a
+        # priming write would queue the fake's reply before execute() gets to
+        # flush, and the flush would then discard it.
+        client._sock = self.FakeSocket(replies)
         return client
 
     def test_inert_session_raises_auth_error(self):
@@ -190,3 +202,36 @@ class TestAccessSubtreeIsReadOnly(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestReplyMisattribution(unittest.TestCase):
+    """A reply must never be attributed to the wrong command.
+
+    Observed on a slower device: `get System#0` returned a reply naming
+    Logs#0, because the read timed out before the device began answering and
+    the reply then landed against the next command. A reconciler that accepts
+    that plans against another object's state.
+    """
+
+    def test_get_refuses_a_reply_for_a_different_path(self):
+        client = sapv2.SapV2Client(host="unused")
+
+        class Desynced(object):
+            def execute(self, command, is_write=False):
+                return 'indi Logs#0 Ready="True", SkipCleanLogs="False"'
+
+        client.execute = Desynced().execute
+        # Must be empty, NOT Logs#0's properties.
+        self.assertEqual(client.get("System#0"), {})
+
+    def test_get_accepts_a_bracket_normalised_form_of_the_same_path(self):
+        client = sapv2.SapV2Client(host="unused")
+        client.execute = lambda command, is_write=False: (
+            'indi Logs#0.LogFileWriter#[a.log] Name="a.log"')
+        self.assertEqual(
+            client.get("Logs#0.LogFileWriter#[a.log]"), {"Name": "a.log"})
+
+    def test_get_is_case_insensitive_on_the_path_only(self):
+        client = sapv2.SapV2Client(host="unused")
+        client.execute = lambda command, is_write=False: 'indi system#0 Ready="True"'
+        self.assertEqual(client.get("System#0"), {"Ready": "True"})

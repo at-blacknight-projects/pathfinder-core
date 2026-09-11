@@ -246,6 +246,11 @@ def parse_properties(payload):
     return props
 
 
+def _normalise_path(path):
+    """Compare paths ignoring case and bracket-quoting of name segments."""
+    return (path or "").replace("#[", "#").replace("]", "").casefold()
+
+
 def parse_error(text):
     """Return ``(path, op, status)`` for an explicit error reply, else None.
 
@@ -474,15 +479,45 @@ class SapV2Client(object):
         except (socket.error, OSError) as exc:
             raise SapV2ConnectionError("send to %s failed: %s" % (self.host, exc))
 
-    def _drain(self):
-        """Read until the socket goes idle for `idle_timeout`.
+    def _flush(self):
+        """Discard anything still pending before issuing a new command.
 
-        SapV2 replies have no terminator and writes produce no reply at all, so
-        an idle gap is the only available frame boundary.
+        Insurance against desynchronisation: if a previous reply arrived late
+        it must not be read as this command's reply.
         """
+        try:
+            self._sock.settimeout(0.05)
+            while True:
+                if not self._sock.recv(65536):
+                    break
+        except (socket.timeout, socket.error, OSError):
+            pass
+
+    def _drain(self, first_byte_timeout=None):
+        """Read a reply: wait for it to START, then read until it goes quiet.
+
+        Two different timeouts, and the distinction is load-bearing. Replies
+        have no terminator, so an idle gap is the only frame boundary - but a
+        single idle timeout also has to cover the device's think time before
+        the first byte, and those are very different quantities. A busy device
+        can take several seconds to begin answering while still streaming the
+        reply in one burst once it starts.
+
+        Collapsing them caused real misattribution: on a slower unit the read
+        timed out empty, and that reply then arrived during the NEXT command
+        and was parsed as its result - a `get System#0` returning another
+        object's properties. So wait `first_byte_timeout` for the reply to
+        begin, then only `idle_timeout` between chunks.
+        """
+        first = self.read_timeout if first_byte_timeout is None else first_byte_timeout
         buf = b""
-        started = time.time()
-        while time.time() - started < self.read_timeout:
+        deadline = time.time() + self.read_timeout
+        started = False
+        try:
+            self._sock.settimeout(first)
+        except (socket.error, OSError):
+            pass
+        while time.time() < deadline:
             try:
                 chunk = self._sock.recv(65536)
             except socket.timeout:
@@ -492,6 +527,12 @@ class SapV2Client(object):
             if not chunk:
                 break
             buf += chunk
+            if not started:
+                started = True
+                try:
+                    self._sock.settimeout(self.idle_timeout)
+                except (socket.error, OSError):
+                    pass
         return buf.decode("utf-8", "replace")
 
     def execute(self, command, is_write=False):
@@ -507,6 +548,7 @@ class SapV2Client(object):
         self.transcript.append({"verb": verb, "command": command, "write": False})
         # A leading CRLF as well as a trailing one: cheap insurance against a
         # residual partial line in the device parser between commands.
+        self._flush()
         self._write(CRLF + command + CRLF)
         return self._drain()
 
@@ -517,10 +559,13 @@ class SapV2Client(object):
         self.transcript.append(entry)
         if self.check_mode:
             return ""
+        self._flush()
         self._write(CRLF + command + CRLF)
-        # Drain anyway. Nothing useful comes back from a write, but leaving
-        # bytes unread would desynchronise the next command's reply.
-        return self._drain()
+        # Drain anyway. A write is normally silent, but it can return an
+        # explicit `error ... $STATUS=...`, and leaving bytes unread would
+        # desynchronise the next command. Only a short wait for it to begin,
+        # since silence is the expected case.
+        return self._drain(first_byte_timeout=self.idle_timeout)
 
     # -- read verbs ------------------------------------------------------
 
@@ -530,10 +575,14 @@ class SapV2Client(object):
         parsed = parse_indi(self.execute(command))
         if path in parsed:
             return parsed[path]
-        # Some firmware echoes a normalised path (case or bracket differences),
-        # so fall back to the sole reply when the read was unambiguous.
-        if len(parsed) == 1:
-            return list(parsed.values())[0]
+        # Match only on a normalised form of the SAME path - never on "there
+        # was exactly one reply". An earlier version did the latter, and when
+        # a reply was misattributed it cheerfully returned a different
+        # object's properties as though they belonged to this path.
+        wanted = _normalise_path(path)
+        for reply_path, props in parsed.items():
+            if _normalise_path(reply_path) == wanted:
+                return props
         return {}
 
     def children(self, path):
