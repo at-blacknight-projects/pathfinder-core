@@ -1,3 +1,10 @@
+## [0.1.0-alpha.7](https://github.com/at-blacknight-projects/pathfinder-core/compare/v0.1.0-alpha.6...v0.1.0-alpha.7) (2026-09-11)
+
+
+### Features
+
+* pfc_logs owns rotation; startup script parsed as raw commands ([1c17d81](https://github.com/at-blacknight-projects/pathfinder-core/commit/1c17d818c67456ebf2f92fc346dace06cce3d568)), closes [Logs#0](https://github.com/at-blacknight-projects/Logs/issues/0) [LogRotator#0](https://github.com/at-blacknight-projects/LogRotator/issues/0) [.RotateRule#0](https://github.com/at-blacknight-projects/.RotateRule/issues/0) [LogRotator#0](https://github.com/at-blacknight-projects/LogRotator/issues/0) [Logs#0](https://github.com/at-blacknight-projects/Logs/issues/0) [Logs#0](https://github.com/at-blacknight-projects/Logs/issues/0)
+
 ## [0.1.0-alpha.6](https://github.com/at-blacknight-projects/pathfinder-core/compare/v0.1.0-alpha.5...v0.1.0-alpha.6) (2026-09-11)
 
 
