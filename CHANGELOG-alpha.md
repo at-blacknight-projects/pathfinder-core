@@ -1,3 +1,10 @@
+## [0.1.0-alpha.2](https://github.com/at-blacknight-projects/pathfinder-core/compare/v0.1.0-alpha.1...v0.1.0-alpha.2) (2026-09-11)
+
+
+### Bug Fixes
+
+* **sapv2:** detect an inert session instead of trusting a silent login ([0ca041e](https://github.com/at-blacknight-projects/pathfinder-core/commit/0ca041ea69f8b734d53abb1e3524eeff7fe1db46)), closes [System#0](https://github.com/at-blacknight-projects/System/issues/0)
+
 ## [0.1.0-alpha.1](https://github.com/at-blacknight-projects/pathfinder-core/compare/v0.0.0...v0.1.0-alpha.1) (2026-09-11)
 
 
