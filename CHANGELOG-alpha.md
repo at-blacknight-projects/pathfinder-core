@@ -1,3 +1,10 @@
+## [0.1.0-alpha.4](https://github.com/at-blacknight-projects/pathfinder-core/compare/v0.1.0-alpha.3...v0.1.0-alpha.4) (2026-09-11)
+
+
+### Bug Fixes
+
+* **advanced:** report durability as observed, measured across a real reboot ([bc17452](https://github.com/at-blacknight-projects/pathfinder-core/commit/bc174523781e1a16eb8e53abb78de5cdfa227391)), closes [System#0](https://github.com/at-blacknight-projects/System/issues/0) [Logs#0](https://github.com/at-blacknight-projects/Logs/issues/0) [Devices#0](https://github.com/at-blacknight-projects/Devices/issues/0)
+
 ## [0.1.0-alpha.3](https://github.com/at-blacknight-projects/pathfinder-core/compare/v0.1.0-alpha.2...v0.1.0-alpha.3) (2026-09-11)
 
 
