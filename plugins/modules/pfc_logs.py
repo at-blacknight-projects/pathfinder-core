@@ -226,6 +226,11 @@ options:
         C(None), C(Incoming), C(Outgoing) or C(Both). C(In) and C(Out) look
         plausible and are silently ignored by the device, so they are rejected
         here at plan time.
+      - >-
+        C(AuditGet), C(AuditSet), C(LoginFailures), C(LoginSuccesses),
+        C(AccessViolations) and C(SkipWebClientSapMessages) are booleans. The
+        last suppresses SAP traffic from the device's own web client, which is
+        the only per-source volume control a writer has.
       - A newly created writer defaults to everything off, so it is inert until
         these are set.
     type: dict

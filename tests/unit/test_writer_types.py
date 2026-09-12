@@ -8,7 +8,7 @@ lock them in.
 """
 import unittest
 
-from loader import logs, sapv2
+from loader import logs, sapv2, subtrees
 
 
 def desired(**kw):
@@ -320,3 +320,57 @@ class TestRotation(unittest.TestCase):
     def test_intended_writes_feed_the_startup_script_check(self):
         self.assertEqual(logs.rotation_writes({"max_count": 3}),
                          [("Logs#0.LogRotator#0.RotateRule#0", "MaxCount", "3")])
+
+
+class TestMessageLogSettingsCoverage(unittest.TestCase):
+    """Every RW property on a real MessageLogSettings object is manageable.
+
+    Established by `rfs` against a Core PRO and diffed against the module's
+    list, which is how SkipWebClientSapMessages was found - it had been missing
+    since the first version and nothing would have surfaced it, because an
+    unmanaged property is simply never written.
+    """
+
+    #: Measured 2026-09-12. FriendlyName/SapObjectType/SubVersion are RO.
+    DEVICE_RW = (
+        "AccessViolations", "AuditGet", "AuditSet", "LoginFailures",
+        "LoginSuccesses", "Lwcp", "Lwrp", "SapV2External", "SapV2Internal",
+        "SkipWebClientSapMessages",
+    )
+
+    def test_no_writable_property_is_unmanaged(self):
+        self.assertEqual(sorted(set(self.DEVICE_RW) - set(logs.MESSAGE_LOG_PROPERTIES)),
+                         [])
+
+    def test_nothing_managed_that_the_device_does_not_expose(self):
+        self.assertEqual(sorted(set(logs.MESSAGE_LOG_PROPERTIES) - set(self.DEVICE_RW)),
+                         [])
+
+    def test_the_new_boolean_validates_like_the_others(self):
+        self.assertEqual(
+            logs.validate_message_log_settings({"SkipWebClientSapMessages": True}), [])
+        self.assertTrue(logs.validate_message_log_settings({"SkipWebClient": True}))
+
+
+class TestLogsRuntimeBoundary(unittest.TestCase):
+    """Logs#0 is declarative, but not entirely."""
+
+    def test_ready_is_refused(self):
+        # RW on the device, but it states whether logging is up rather than
+        # configuring it - and the plausible reading of a write is "stop".
+        guard = subtrees.SubtreeGuard()
+        with self.assertRaises(sapv2.SapV2GuardError):
+            guard.assert_writable("Logs#0", verb="set", properties=["Ready"])
+
+    def test_rotator_file_stats_are_refused(self):
+        guard = subtrees.SubtreeGuard()
+        for prop in ("LogSize", "LastChanged", "RootFileName"):
+            with self.assertRaises(sapv2.SapV2GuardError):
+                guard.assert_writable("Logs#0.LogRotator#0.LogFile#[user/a.log]",
+                                      verb="set", properties=[prop])
+
+    def test_rotation_policy_is_still_writable(self):
+        # RotateRule#0 is the wildcard rule (RootFileName="*") and IS config.
+        subtrees.SubtreeGuard().assert_writable(
+            "Logs#0.LogRotator#0.RotateRule#0", verb="set",
+            properties=["MaxFileSize", "MaxCount"])

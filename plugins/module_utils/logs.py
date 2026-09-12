@@ -201,6 +201,11 @@ DIRECTION_PROPERTIES = ("Lwrp", "Lwcp", "SapV2Internal", "SapV2External")
 
 BOOLEAN_PROPERTIES = (
     "AuditGet", "AuditSet", "LoginFailures", "LoginSuccesses", "AccessViolations",
+    # Suppresses SAP traffic originating from the device's own web client.
+    # Found by diffing the module's property list against an `rfs` of a real
+    # MessageLogSettings object rather than by being asked for - it is a volume
+    # control on a writer that is otherwise all-or-nothing per protocol.
+    "SkipWebClientSapMessages",
 )
 
 MESSAGE_LOG_PROPERTIES = DIRECTION_PROPERTIES + BOOLEAN_PROPERTIES

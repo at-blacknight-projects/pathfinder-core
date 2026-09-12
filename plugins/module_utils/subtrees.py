@@ -104,7 +104,22 @@ SUBTREES = [
         "Logs#0", DECLARATIVE,
         "Log writers, subscriptions and MessageLogSettings. Nothing else writes "
         "here, and the worst case for getting it wrong is losing logs rather "
-        "than losing air - which is why this subtree was implemented first.",
+        "than losing air - which is why this subtree was implemented first. "
+        "Declarative with two exceptions: Logs#0.Ready is RW but reports "
+        "whether logging is up, and the LogRotator's LogFile children are "
+        "observed file stats.",
+        runtime_properties=[
+            # RW=BOL, reads True on a healthy device. Whatever it means, it is
+            # a statement ABOUT the log subsystem rather than a setting for it,
+            # and the plausible reading - "logging is running" - is one where
+            # writing it turns logging off. Nothing exposes it today; this is
+            # here so nothing can start to without deciding on purpose.
+            "Ready",
+            # Logs#0.LogRotator#0.LogFile#<name>: what the rotator has observed
+            # about each file on disk, not how it should treat them. Rotation
+            # policy is RotateRule#0, which IS managed.
+            "LogSize", "LastChanged", "RootFileName",
+        ],
         implemented_by="pfc_logs",
         purge_safe=True,
         verify_scope="object",
