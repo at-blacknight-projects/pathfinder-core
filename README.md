@@ -90,9 +90,9 @@ state did not take. A reported `changed=true` always means verified.
         host: "{{ inventory_hostname }}"
         username: "{{ lookup('env', 'PFC_USER') }}"
         password: "{{ lookup('env', 'PFC_PASS') }}"
-        writer:
-          name: alloy_site1
-          ip: 192.0.2.10
+        writers:
+          - name: alloy_site1
+            ip: 192.0.2.10
         subscriptions: "{{ pfc_subscriptions }}"
       check_mode: true
 ```
@@ -100,6 +100,39 @@ state did not take. A reported `changed=true` always means verified.
 Credentials fall back to `PFC_USER` / `PFC_PASS`, which is how AWX custom
 credential types, Semaphore secret survey vars and CI variables should inject
 them.
+
+## The device's writers are reconciled together
+
+`pfc_logs` takes the whole `writers` list rather than one writer per task. Two
+of the reasons are ordinary — one login instead of one per writer, and one plan
+and one diff for the device — but the third is the one that matters:
+
+```yaml
+    - name: Cut over to the new receiver
+      at_blacknight.pathfinder_core.pfc_logs:
+        host: "{{ inventory_hostname }}"
+        writers:
+          - name: alloy_site1          # the replacement
+            ip: 192.0.2.10
+          - name: legacy_collector     # the writer it replaces
+            type: tcp_client
+            state: absent
+        subscriptions: "{{ pfc_subscriptions }}"
+```
+
+That runs in three phases: every `present` writer is created and configured,
+**all of it is read back**, and only then are the `absent` writers deleted. If
+the new writer did not come up, the old one is still there and the task fails
+saying so.
+
+Separate tasks cannot express that. By the time a delete task ran, the create
+task would already have reported success — and on this protocol a create that
+the device silently ignored looks exactly like one that worked.
+
+`state`, `subscriptions`, `subscriptions_purge` and `message_log_settings` may
+be set per writer or once at task level. Omitting one inherits the task-level
+value; setting it to an empty list or dict does not, so a writer can opt out of
+a shared catalogue with `subscriptions: []`.
 
 ## Protocol notes
 
@@ -116,8 +149,13 @@ The module_utils depend only on the standard library, so:
 python -m unittest discover -s tests/unit -t tests/unit
 ```
 
-83 tests, no device and no Ansible required. `tests/unit/loader.py` handles
+191 tests, no device and no Ansible required. `tests/unit/loader.py` handles
 importing the collection outside an `ansible_collections/` tree.
+
+That coverage is only possible because the reconcilers live in `module_utils`
+and take a client rather than an `AnsibleModule` — including the phase ordering
+above, which is exercised against a fake device that accepts writes and ignores
+them, the way real hardware fails.
 
 For `ansible-test`, the repo must be checked out at a path ending
 `ansible_collections/at_blacknight/pathfinder_core/`.

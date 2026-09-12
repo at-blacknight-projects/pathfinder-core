@@ -26,6 +26,11 @@ description:
     C(changed=true) always means verified.
   - Check mode performs the reads, computes the plan and writes nothing, which
     makes it a drift report suitable for running unattended on a schedule.
+  - >-
+    Takes the device's whole set of writers at once, so one task can stand up a
+    replacement writer and retire the one it replaces. Creates and
+    configuration are applied and verified first; the deletes run only if all
+    of that verified. See I(writers).
 options:
   host:
     description: Hostname or address of the PathfinderCore device.
@@ -48,22 +53,37 @@ options:
         variable.
     type: str
     required: true
-  writer:
+  writers:
     description:
-      - The log writer to manage. A writer is identified by C(name) plus its
-        endpoint, and on every type the endpoint property is read-only once the
-        object exists, so changing it means delete-and-recreate.
-      - Avoid C(.) in C(name). It is SapV2's path separator, so a dotted name
-        has to be bracket-quoted in every subsequent command. A C(log_file)
-        name is a filename and normally does contain one; the device handles
-        the quoting itself.
-    type: dict
+      - The device's log writers, as a list. One session is opened for the
+        whole list, which matters because SapV2 frames replies on an idle gap
+        and a login costs several seconds.
+      - >-
+        Order of execution is not list order. Every C(present) entry is applied
+        and read back first, and the C(absent) entries run only once all of
+        that has verified. A writer being retired is therefore never deleted on
+        a run where its replacement failed to come up.
+      - >-
+        A writer is identified by I(type) plus I(name), so the same name under
+        two types is two different objects. The same pair twice is rejected.
+      - >-
+        I(state), I(subscriptions), I(subscriptions_purge) and
+        I(message_log_settings) may be set here per writer, or once at task
+        level to apply to every writer that does not state its own. Omitting one
+        inherits the task-level value; setting it to an empty list or dict does
+        not.
+    type: list
+    elements: dict
     required: true
     suboptions:
       name:
         description:
           - Writer name, used as its address in the object tree. For
             C(log_file) this is the filename.
+          - Avoid C(.) in a name. It is SapV2's path separator, so a dotted
+            name has to be bracket-quoted in every subsequent command. A
+            C(log_file) name is a filename and normally does contain one; the
+            device handles that quoting itself.
         type: str
         required: true
       type:
@@ -106,17 +126,57 @@ options:
             C(tcp_listener) (those plus C(Listening)) have any; C(udp_syslog)
             and C(log_file) have none, and naming one there is rejected.
         type: dict
+      state:
+        description:
+          - C(present) reconciles this writer. C(absent) deletes it and every
+            subscription under it.
+          - Defaults to the task-level I(state).
+        type: str
+        choices: [present, absent]
+      subscriptions:
+        description:
+          - Desired log subscriptions for this writer. Defaults to the
+            task-level I(subscriptions).
+        type: list
+        elements: dict
+        suboptions:
+          typeid:
+            description: SubscriptionTypeId, the identity key.
+            type: int
+            required: true
+          subscription:
+            description: The SapV2 subscription expression.
+            type: str
+            required: true
+          severity:
+            description: Severity recorded on the device. Read-only after creation.
+            type: str
+            choices: [Informational, Warning, Error, Critical, Debug]
+            default: Informational
+          customname:
+            description: Friendly name stored on the device. Read-only after creation.
+            type: str
+      subscriptions_purge:
+        description:
+          - Whether to delete subscriptions on this writer that
+            I(subscriptions) does not list. Defaults to the task-level
+            I(subscriptions_purge).
+        type: bool
+      message_log_settings:
+        description:
+          - MessageLogSettings for this writer. Defaults to the task-level
+            I(message_log_settings).
+        type: dict
   state:
     description:
-      - C(present) reconciles the writer. C(absent) deletes it and every
-        subscription under it.
+      - Default I(state) for I(writers) entries that do not set their own.
     type: str
     choices: [present, absent]
     default: present
   subscriptions:
     description:
-      - Desired log subscriptions, identified by I(typeid)
-        (C(SubscriptionTypeId)).
+      - Default subscriptions for I(writers) entries that do not set their own,
+        identified by I(typeid) (C(SubscriptionTypeId)).
       - The C(subscription) expression is writable and updates in place.
         C(severity) and C(customname) are read-only after creation, so a change
         to either is applied by deleting and recreating that subscription -
@@ -150,8 +210,9 @@ options:
         type: str
   subscriptions_purge:
     description:
-      - Whether to delete subscriptions present on the device but absent from
-        I(subscriptions).
+      - Default for I(writers) entries that do not set their own. Whether to
+        delete subscriptions present on the device but absent from the writer's
+        subscription list.
       - Defaults to false because subscription sets differ per device and were
         generally chosen by local operators. Turn it on only where the
         catalogue is genuinely authoritative for that device.
@@ -159,7 +220,8 @@ options:
     default: false
   message_log_settings:
     description:
-      - MessageLogSettings properties, all writable.
+      - Default MessageLogSettings for I(writers) entries that do not set their
+        own. All of these are writable.
       - C(Lwrp), C(Lwcp), C(SapV2Internal) and C(SapV2External) take
         C(None), C(Incoming), C(Outgoing) or C(Both). C(In) and C(Out) look
         plausible and are silently ignored by the device, so they are rejected
@@ -173,19 +235,20 @@ options:
         C(minutes_between_search), C(skip_clean_logs) and
         C(check_rotation_after_max_writes).
       - These live under C(Logs#0), which is why they are here rather than in
-        C(pfc_advanced_options) - each reconciler owns a subtree, and two
-        modules on the same properties would conflict.
-      - Device-scoped, unlike the rest of this module. Reconciling two writers
-        on one device applies rotation twice. That is idempotent, but two tasks
-        asking for different values would fight and nothing here can detect it,
-        so set rotation on one task only.
+        C(pfc_startup_script) - each reconciler owns a subtree, and two modules
+        writing the same properties would conflict.
+      - Device-scoped rather than per-writer, which is why it sits beside
+        I(writers) rather than inside an entry. Two tasks asking for different
+        values on one device would fight and nothing here can detect it, so set
+        rotation on one task only.
       - This is the complete set SapV2 exposes. There is no max-age or
         total-size control. Omit it to leave rotation alone.
     type: dict
   startup_script:
     description:
-      - The device's Advanced options script, as raw command lines copied from
-        the GUI. Optional and purely advisory.
+      - The device's Advanced options script, as raw command lines. Optional and
+        purely advisory here; C(pfc_startup_script) is the module that manages
+        it.
       - The script replays at boot and is NOT reachable over SapV2, so a value
         set here can be reverted at the next restart. Supplying the script lets
         the module warn which requested values that applies to, rather than
@@ -196,14 +259,14 @@ options:
     elements: str
   on_immutable_change:
     description:
-      - What to do when the writer exists but its endpoint URI differs from
-        I(writer.ip). C(RemoteEndpointUri) is read-only, so the only repair is
-        delete-and-recreate, which interrupts log delivery.
+      - What to do when a writer exists but its endpoint differs from the one
+        asked for. The endpoint property is read-only on every type, so the
+        only repair is delete-and-recreate, which interrupts log delivery.
       - C(fail) reports the conflict and changes nothing. C(replace) performs
         the delete and recreate.
       - Defaults to C(fail) because the safe estate procedure is additive -
         create the new writer under a different name, confirm delivery, then
-        remove the old one.
+        remove the old one. That is a single task now that I(writers) is a list.
     type: str
     choices: [fail, replace]
     default: fail
@@ -224,6 +287,9 @@ notes:
     credential given to it can.
   - C(Connected=True) on a UDP writer means nothing - there is no connection to
     be up. It is not a delivery signal and this module does not treat it as one.
+  - >-
+    The singular C(writer) option was replaced by I(writers) in 0.1.0-alpha.9.
+    Wrap the old dict in a list to migrate; nothing else about it changed.
 author:
   - Adam Butler (@at-blacknight)
 """
@@ -234,9 +300,9 @@ EXAMPLES = r"""
     host: "{{ inventory_hostname }}"
     username: "{{ pfc_username }}"
     password: "{{ pfc_password }}"
-    writer:
-      name: alloy_site1
-      ip: 192.0.2.10
+    writers:
+      - name: alloy_site1
+        ip: 192.0.2.10
     subscriptions: "{{ pfc_subscriptions }}"
   check_mode: true
   register: drift
@@ -246,28 +312,46 @@ EXAMPLES = r"""
     host: "{{ inventory_hostname }}"
     username: "{{ pfc_username }}"
     password: "{{ pfc_password }}"
-    writer:
-      name: alloy_site2
-      ip: 192.0.2.20
+    writers:
+      - name: alloy_site2
+        ip: 192.0.2.20
   # No subscriptions and MessageLogSettings defaulting to off means the writer
   # exists but emits nothing until a later run adds them.
 
-- name: Full reconcile including protocol logging
+- name: Cut over in one task - the delete runs only if the create verified
+  at_blacknight.pathfinder_core.pfc_logs:
+    host: "{{ inventory_hostname }}"
+    username: "{{ pfc_username }}"
+    password: "{{ pfc_password }}"
+    writers:
+      - name: alloy_site1
+        ip: 192.0.2.10
+      - name: old_tcp_target
+        type: tcp_client
+        state: absent
+    subscriptions: "{{ pfc_subscriptions }}"
+    message_log_settings:
+      Lwrp: Both
+      SapV2Internal: Both
+  # Task-level subscriptions and settings apply to alloy_site1. The absent
+  # entry ignores them: nothing is configured on a writer being deleted.
+
+- name: Two writers with deliberately different subscription sets
   at_blacknight.pathfinder_core.pfc_logs:
     host: pfc-002.example.net
     username: "{{ lookup('env', 'PFC_USER') }}"
     password: "{{ lookup('env', 'PFC_PASS') }}"
-    writer:
-      name: alloy_site2
-      ip: 192.0.2.20
-    subscriptions:
-      - typeid: 1001
-        subscription: "sub Devices#0 Connected $MAX_DEPTH=-1"
-        severity: Warning
-        customname: device-connected
-      - typeid: 7002
-        subscription: "sub Devices#0 GAIN $MAX_DEPTH=-1"
-        customname: device-gain
+    writers:
+      - name: alloy_site2
+        ip: 192.0.2.20
+        subscriptions: "{{ pfc_subscriptions }}"
+      - name: audit.log
+        type: log_file
+        subscriptions:
+          - typeid: 1001
+            subscription: "sub Devices#0 Connected $MAX_DEPTH=-1"
+            severity: Warning
+            customname: device-connected
     message_log_settings:
       Lwrp: Both
       SapV2Internal: Both
@@ -278,9 +362,9 @@ EXAMPLES = r"""
     host: "{{ inventory_hostname }}"
     username: "{{ pfc_username }}"
     password: "{{ pfc_password }}"
-    writer:
-      name: alloy_site1
-      ip: 192.0.2.10
+    writers:
+      - name: alloy_site1
+        ip: 192.0.2.10
     rotation:
       max_file_size: 1
       max_count: 3
@@ -288,16 +372,6 @@ EXAMPLES = r"""
       - 'SET Logs#0.LogRotator#0.RotateRule#0 MaxFileSize=100'
       - 'SET Logs#0.LogRotator#0.RotateRule#0 MaxCount=10'
   # => warns that both revert at the next reboot, and applies them anyway
-
-- name: Retire the legacy writer once the replacement is confirmed
-  at_blacknight.pathfinder_core.pfc_logs:
-    host: "{{ inventory_hostname }}"
-    username: "{{ pfc_username }}"
-    password: "{{ pfc_password }}"
-    writer:
-      name: old_tcp_target
-      ip: 192.0.2.21
-    state: absent
 """
 
 RETURN = r"""
@@ -307,8 +381,12 @@ changed:
   type: bool
 plan:
   description:
-    - The ordered actions required. Populated in check mode too, where it is
-      the drift report.
+    - The ordered actions required, across every writer. Populated in check
+      mode too, where it is the drift report.
+    - >-
+      Ordered as it will be executed, which is not input order - every
+      C(present) writer, then rotation, then the C(absent) writers. Each entry
+      carries C(writer) and C(type), or C(scope=device) for rotation.
   returned: always
   type: list
   elements: dict
@@ -316,6 +394,9 @@ plan:
     - action: subscription_create
       summary: create subscription 1001 (device-connected) on alloy_site1
       destructive: false
+      writer: alloy_site1
+      type: udp_syslog
+      scope: writer
 transcript:
   description:
     - Every command issued, in order, with writes marked and passwords
@@ -323,10 +404,50 @@ transcript:
   returned: always
   type: list
   elements: dict
-writer:
-  description: The device's state after reconciling, as read back.
-  returned: success
-  type: dict
+writers:
+  description:
+    - One entry per requested writer, in input order, holding the device's
+      state as last read.
+  returned: always
+  type: list
+  elements: dict
+  contains:
+    name:
+      description: The writer's name.
+      returned: always
+      type: str
+    type:
+      description: The writer type key.
+      returned: always
+      type: str
+    path:
+      description: Its full SapV2 object path.
+      returned: always
+      type: str
+    changed:
+      description: Whether this writer had any planned action.
+      returned: always
+      type: bool
+    verified:
+      description: Whether this writer was written to and read back successfully.
+      returned: always
+      type: bool
+    exists:
+      description: Whether the writer exists on the device.
+      returned: always
+      type: bool
+    properties:
+      description: Properties of the writer object.
+      returned: always
+      type: dict
+    subscriptions:
+      description: Subscriptions under the writer, keyed by SubscriptionTypeId.
+      returned: always
+      type: dict
+    message_log_settings:
+      description: The writer's MessageLogSettings.
+      returned: always
+      type: dict
 rotation:
   description: Rotation settings as read from the device.
   returned: always
@@ -362,21 +483,44 @@ from ansible_collections.at_blacknight.pathfinder_core.plugins.module_utils impo
     startup as startup_script,
 )
 from ansible_collections.at_blacknight.pathfinder_core.plugins.module_utils.logs import (
-    apply_plan,
-    apply_rotation,
-    plan_rotation,
-    read_rotation,
+    DEFAULT_WRITER_TYPE,
+    INHERITED_KEYS,
+    plan_device,
+    resolve_writers,
     rotation_writes,
     validate_rotation,
-    verify_rotation,
-    plan as build_plan,
-    read_actual,
-    render_state,
-    validate_message_log_settings,
-    validate_subscriptions,
-    validate_writer,
-    verify,
+    validate_writers,
 )
+
+
+def subscription_spec():
+    # A factory rather than a shared dict: the same spec appears twice (task
+    # level and inside writers), and AnsibleModule annotates the spec it is
+    # given, so handing it the same object twice invites surprises.
+    return dict(
+        typeid=dict(type="int", required=True),
+        subscription=dict(type="str", required=True),
+        severity=dict(type="str", default="Informational",
+                      choices=["Informational", "Warning", "Error",
+                               "Critical", "Debug"]),
+        customname=dict(type="str"),
+    )
+
+
+def report(writer):
+    """One WriterPlan as its entry in the `writers` return value."""
+    return {
+        "name": writer.name,
+        "type": writer.type_key,
+        "state": writer.state,
+        "path": writer.path,
+        "changed": writer.changed,
+        "verified": writer.verified,
+        "exists": writer.actual.get("exists", False),
+        "properties": writer.actual.get("properties", {}),
+        "subscriptions": writer.actual.get("subscriptions", {}),
+        "message_log_settings": writer.actual.get("message_log_settings", {}),
+    }
 
 
 def main():
@@ -388,24 +532,23 @@ def main():
                           fallback=(env_fallback, ["PFC_USER"])),
             password=dict(type="str", required=True, no_log=True,
                           fallback=(env_fallback, ["PFC_PASS"])),
-            writer=dict(type="dict", required=True, options=dict(
+            writers=dict(type="list", elements="dict", required=True, options=dict(
                 name=dict(type="str", required=True),
-                ip=dict(type="str"),
-                type=dict(type="str", default="udp_syslog",
+                type=dict(type="str", default=DEFAULT_WRITER_TYPE,
                           choices=["udp_syslog", "tcp_client", "tcp_listener",
                                    "log_file"]),
+                ip=dict(type="str"),
                 port=dict(type="int"),
                 properties=dict(type="dict"),
+                state=dict(type="str", choices=["present", "absent"]),
+                subscriptions=dict(type="list", elements="dict",
+                                   options=subscription_spec()),
+                subscriptions_purge=dict(type="bool"),
+                message_log_settings=dict(type="dict"),
             )),
             state=dict(type="str", default="present", choices=["present", "absent"]),
-            subscriptions=dict(type="list", elements="dict", default=[], options=dict(
-                typeid=dict(type="int", required=True),
-                subscription=dict(type="str", required=True),
-                severity=dict(type="str", default="Informational",
-                              choices=["Informational", "Warning", "Error",
-                                       "Critical", "Debug"]),
-                customname=dict(type="str"),
-            )),
+            subscriptions=dict(type="list", elements="dict", default=[],
+                               options=subscription_spec()),
             subscriptions_purge=dict(type="bool", default=False),
             message_log_settings=dict(type="dict"),
             rotation=dict(type="dict"),
@@ -419,32 +562,25 @@ def main():
     )
 
     params = module.params
-    desired = {
-        "name": params["writer"]["name"],
-        "ip": params["writer"].get("ip"),
-        "port": params["writer"].get("port"),
-        "type": params["writer"].get("type") or "udp_syslog",
-        "properties": params["writer"].get("properties") or {},
-        "state": params["state"],
-        "subscriptions": params["subscriptions"] or [],
-        "message_log_settings": params["message_log_settings"] or {},
-    }
-
+    writers = resolve_writers(
+        params["writers"],
+        dict((key, params[key]) for key in INHERITED_KEYS))
     rotation = params["rotation"] or {}
-    problems = (validate_writer(desired)
-                + validate_rotation(rotation)
-                + validate_subscriptions(desired["subscriptions"])
-                + validate_message_log_settings(desired["message_log_settings"]))
+
+    problems = validate_writers(writers) + validate_rotation(rotation)
     if problems:
         # Fail before opening a session. Every one of these would otherwise be
         # accepted on the wire and silently ignored by the device.
         module.fail_json(msg="invalid desired state: %s" % "; ".join(problems))
 
-    if "." in desired["name"]:
-        module.warn(
-            "writer name %r contains '.', which is SapV2's path separator. The "
-            "object will only be addressable as #[%s]. Underscores are the "
-            "safer convention." % (desired["name"], desired["name"]))
+    for entry in writers:
+        # A log_file writer is named after its file, so a dot is expected there
+        # and the device does the bracket-quoting itself.
+        if "." in entry["name"] and entry["type"] != "log_file":
+            module.warn(
+                "writer name %r contains '.', which is SapV2's path separator. "
+                "The object will only be addressable as #[%s]. Underscores are "
+                "the safer convention." % (entry["name"], entry["name"]))
 
     client = SapV2Client(
         host=params["host"],
@@ -455,31 +591,25 @@ def main():
     )
 
     result = {"changed": False, "plan": [], "transcript": client.transcript,
-              "verified": False, "writer": {}, "rotation": {},
+              "verified": False, "writers": [], "rotation": {}, "diff": [],
               "will_revert_at_reboot": [], "startup_script_unparsed": []}
 
     try:
         client.connect(params["username"], params["password"])
 
-        actual = read_actual(client, desired["name"], desired["type"])
-        actions = build_plan(
-            desired, actual,
-            on_immutable_change=params["on_immutable_change"],
-            purge_subscriptions=params["subscriptions_purge"],
-        )
-        result["plan"] = [action.to_dict() for action in actions]
-        # Populated whether or not --diff was passed; Ansible only renders it
-        # when asked.
-        result["diff"] = render_state(
-            desired, actual, purge_subscriptions=params["subscriptions_purge"])
+        planned = plan_device(client, writers, rotation,
+                              on_immutable_change=params["on_immutable_change"])
 
-        # Rotation is device-scoped rather than per-writer, so it is planned
-        # separately and only when asked for.
-        rotation_actual = read_rotation(client) if rotation else {}
-        rotation_actions = plan_rotation(rotation, rotation_actual)
-        actions = actions + rotation_actions
-        result["plan"] = [action.to_dict() for action in actions]
-        result["rotation"] = rotation_actual
+        def read_state():
+            """Refresh the parts of the result that a write can change."""
+            result["rotation"] = planned.rotation_actual
+            result["writers"] = [report(w) for w in planned.writers]
+
+        result["plan"] = [action.to_dict() for action in planned.actions]
+        # Computed before applying: "before" has to be the state the device was
+        # in when the plan was made, and applying replaces those reads.
+        result["diff"] = planned.diff()
+        read_state()
 
         # The Advanced options startup script replays at boot and cannot be
         # read or written over SapV2, so warn where it will undo this.
@@ -493,30 +623,30 @@ def main():
         for warning in reverting:
             module.warn(warning)
 
-        blocked = [a for a in actions if a.kind.startswith("blocked_")]
-        if blocked:
-            module.fail_json(msg=blocked[0].summary, **result)
+        # Report every blocked action, not just the first: with several writers
+        # in one task, fixing them one run at a time is needless.
+        if planned.blocked:
+            module.fail_json(
+                msg="; ".join(a.summary for a in planned.blocked), **result)
 
-        result["changed"] = bool(actions)
-
-        if module.check_mode:
-            result["writer"] = actual
+        result["changed"] = planned.changed
+        if module.check_mode or not planned.changed:
             module.exit_json(**result)
 
-        if actions:
-            apply_plan(client, desired, actions)
-            apply_rotation(client, rotation_actions)
-            result["writer"] = verify(
-                client, desired,
-                purge_subscriptions=params["subscriptions_purge"])
-            if rotation:
-                result["rotation"] = verify_rotation(client, rotation)
-            result["verified"] = True
-        else:
-            result["writer"] = actual
-            # Nothing was written, so there is nothing to verify. Saying
-            # verified=true here would overstate what actually happened.
+        failures = planned.apply(client)
+        read_state()
 
+        if failures:
+            pending = sum(len(w.actions) for w in planned.deleting)
+            module.fail_json(
+                msg=("read-back verification failed%s. %s"
+                     % ((", so the %d delete(s) in this plan were NOT performed "
+                         "- whatever they would have retired is still in place"
+                         % pending) if pending else "",
+                        " | ".join(failures))),
+                **result)
+
+        result["verified"] = True
         module.exit_json(**result)
 
     except SapV2Error as exc:

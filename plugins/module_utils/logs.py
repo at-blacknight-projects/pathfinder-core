@@ -246,7 +246,18 @@ def normalise_scalar(value):
     """Render a desired value the way the device reports it back."""
     if isinstance(value, bool):
         return "True" if value else "False"
-    return str(value).strip()
+    text = str(value).strip()
+    # A boolean that arrived as a string - from an untyped dict suboption, or a
+    # Jinja expression that stringified on the way in - would otherwise never
+    # compare equal to the device's "True"/"False". The module would then plan
+    # the same write on every run, send it, read back a value it still
+    # considered different, and fail verification. Reporting a permanent
+    # non-convergence for a device that is in fact correct is the worst of the
+    # available failure modes, so fold the case here. No property on this
+    # device holds a free-text value where "true" means anything else.
+    if text.lower() in ("true", "false"):
+        return text.capitalize()
+    return text
 
 
 def validate_message_log_settings(settings):
@@ -324,6 +335,50 @@ def validate_subscriptions(subscriptions):
     return problems
 
 
+def validate_writers(writers):
+    """Validate a whole writer list, including conflicts between its entries.
+
+    Per-entry problems are prefixed with the index and name so a list of a
+    dozen writers reports which one is wrong. Everything here is checked
+    before a session is opened: on this protocol an invalid write is accepted
+    and ignored rather than refused, so the only cheap place to catch a bad
+    request is before it is sent.
+    """
+    problems = []
+    seen = {}
+    for index, entry in enumerate(writers or []):
+        label = "writers[%d]" % index
+        name = entry.get("name")
+        if not name:
+            problems.append("%s has no name" % label)
+            continue
+        try:
+            wtype = writer_type(entry.get("type"))
+        except KeyError as exc:
+            problems.append("%s (%s): %s" % (label, name, exc))
+            continue
+
+        # Identity is (type, name), not name alone: the four types live at
+        # different paths, so one name under two types is two distinct objects.
+        # The same pair twice is not - the second entry would plan against the
+        # first entry's writes and the outcome would depend on list order.
+        key = (wtype.key, name)
+        if key in seen:
+            problems.append(
+                "%s duplicates writers[%d]: %s %r appears twice. A writer is "
+                "identified by (type, name), so the second entry would be "
+                "planned against the first entry's writes."
+                % (label, seen[key], wtype.key, name))
+        seen[key] = index
+
+        for problem in (validate_writer(entry)
+                        + validate_subscriptions(entry.get("subscriptions"))
+                        + validate_message_log_settings(
+                            entry.get("message_log_settings"))):
+            problems.append("%s (%s): %s" % (label, name, problem))
+    return problems
+
+
 # -- actions -------------------------------------------------------------
 
 class Action(object):
@@ -380,9 +435,23 @@ def read_actual(client, writer_name, wtype=DEFAULT_WRITER_TYPE):
 def plan(desired, actual, on_immutable_change="fail", purge_subscriptions=False):
     """Compute the ordered list of actions to bring `actual` to `desired`.
 
-    Pure: no client, no I/O. `desired` is the module's validated parameters,
-    `actual` is :func:`read_actual` output.
+    Pure: no client, no I/O. `desired` is one validated writer entry, `actual`
+    is :func:`read_actual` output for it.
     """
+    wtype = writer_type(desired.get("type"))
+    actions = _plan_writer(desired, actual, on_immutable_change, purge_subscriptions)
+    # Stamp every action with the writer it belongs to. The module flattens
+    # the per-writer plans into one ordered list for the device, and `summary`
+    # alone is not enough for a caller to tell two writers apart or to filter
+    # the plan down to one of them.
+    for action in actions:
+        action.detail.setdefault("writer", desired["name"])
+        action.detail.setdefault("type", wtype.key)
+        action.detail.setdefault("scope", "writer")
+    return actions
+
+
+def _plan_writer(desired, actual, on_immutable_change, purge_subscriptions):
     actions = []
     name = desired["name"]
     state = desired.get("state", "present")
@@ -882,7 +951,8 @@ def plan_rotation(rotation, actual):
                 "blocked_absent_property",
                 "rotation.%s maps to %s.%s, which this device does not expose. "
                 "Writing it would be accepted and ignored." % (key, path, prop),
-                detail={"setting": key, "path": path, "property": prop}))
+                detail={"setting": key, "path": path, "property": prop,
+                        "scope": "device"}))
             continue
         if normalise_scalar(properties.get(prop, "")) != want:
             actions.append(Action(
@@ -891,8 +961,38 @@ def plan_rotation(rotation, actual):
                 % (path, prop, properties.get(prop, ""), want),
                 detail={"setting": key, "path": path, "property": prop,
                         "from": normalise_scalar(properties.get(prop, "")),
-                        "to": want}))
+                        "to": want, "scope": "device"}))
     return actions
+
+
+def rotation_diff(rotation, actual):
+    """Render rotation before/after for Ansible's ``--diff``.
+
+    Rotation lives on three different objects under ``Logs#0`` and is
+    device-scoped rather than per-writer, so it gets its own diff entry. Without
+    one, a run whose only change is rotation reports ``changed`` against an
+    empty diff, which reads like a bug in the module.
+    """
+    def block(values):
+        lines = ["# %s rotation" % LOGS_ROOT]
+        for key in sorted(ROTATION_PROPERTIES):
+            lines.append("%-32s %s" % (key, values[key]))
+        return "\n".join(lines) + "\n"
+
+    before, after = {}, {}
+    for key in ROTATION_PROPERTIES:
+        path, prop, _kind = ROTATION_PROPERTIES[key]
+        have = normalise_scalar(actual.get(path, {}).get(prop, ""))
+        before[key] = have
+        # Settings not asked for are left alone, so they belong unchanged in
+        # the "after" - showing them as removed would advertise a write this
+        # module is not going to make.
+        after[key] = (normalise_scalar(rotation[key])
+                      if key in (rotation or {}) else have)
+
+    header = "%s rotation" % LOGS_ROOT
+    return {"before": block(before), "after": block(after),
+            "before_header": header, "after_header": header}
 
 
 def apply_rotation(client, actions):
@@ -931,3 +1031,213 @@ def rotation_writes(rotation):
         path, prop, _kind = ROTATION_PROPERTIES[key]
         out.append((path, prop, normalise_scalar(rotation[key])))
     return out
+
+
+# -- the device as a whole ------------------------------------------------
+#
+# A PathfinderCore's writers are reconciled together rather than one task per
+# writer. Three reasons, in increasing order of importance:
+#
+# 1. One session. SapV2 frames replies on an idle gap and a login costs several
+#    seconds, so a loop over a single-writer module pays that per item.
+# 2. One plan and one diff for the device, instead of a run of separate task
+#    results that have to be read side by side to see what the device will end
+#    up looking like.
+# 3. Ordering. Standing up a replacement writer and retiring the one it
+#    replaces is one intent, and it is only safe in one order. Separate tasks
+#    cannot express "delete that one only if this one came up", because by the
+#    time the delete task runs the create task has already reported success.
+
+#: Keys a writers[] entry may either state itself or inherit from task level.
+INHERITED_KEYS = ("state", "subscriptions", "subscriptions_purge",
+                  "message_log_settings")
+
+
+def resolve_writers(entries, defaults):
+    """Fill each writer entry from the task-level defaults.
+
+    An omitted key inherits; a key set to an empty list or dict does not. That
+    distinction is why the module's argument spec gives these suboptions no
+    default - Ansible fills an omitted suboption with ``None``, so ``None`` is
+    the only available marker for "not stated here", and an explicit
+    ``subscriptions: []`` on one writer has to mean none rather than "inherit
+    the device's catalogue".
+    """
+    resolved = []
+    for entry in entries or []:
+        out = {
+            "name": entry.get("name"),
+            "type": entry.get("type") or DEFAULT_WRITER_TYPE,
+            "ip": entry.get("ip"),
+            "port": entry.get("port"),
+            "properties": entry.get("properties") or {},
+        }
+        for key in INHERITED_KEYS:
+            value = entry.get(key)
+            out[key] = (defaults or {}).get(key) if value is None else value
+        out["state"] = out["state"] or "present"
+        out["subscriptions"] = out["subscriptions"] or []
+        out["message_log_settings"] = out["message_log_settings"] or {}
+        out["subscriptions_purge"] = bool(out["subscriptions_purge"])
+        resolved.append(out)
+    return resolved
+
+
+class WriterPlan(object):
+    """One writer's desired state, its state on the device, and the gap."""
+
+    def __init__(self, desired, actual, actions):
+        self.desired = desired
+        self.actual = actual
+        self.actions = actions
+        #: Set once this writer has been written to AND read back successfully.
+        #: Stays False for a converged writer: nothing was written, so there
+        #: was nothing to verify, and saying otherwise would overstate it.
+        self.verified = False
+
+    @property
+    def name(self):
+        return self.desired["name"]
+
+    @property
+    def type_key(self):
+        return self.desired.get("type") or DEFAULT_WRITER_TYPE
+
+    @property
+    def state(self):
+        return self.desired.get("state", "present")
+
+    @property
+    def changed(self):
+        return bool(self.actions)
+
+    @property
+    def purge(self):
+        return self.desired.get("subscriptions_purge", False)
+
+    @property
+    def path(self):
+        return writer_path(self.name, self.type_key)
+
+    def diff(self):
+        return render_state(self.desired, self.actual,
+                            purge_subscriptions=self.purge)
+
+
+class DevicePlan(object):
+    """Everything one run intends to do to one device.
+
+    Built by :func:`plan_device` from reads alone, so it is also the check-mode
+    result: the plan, the diff and the drift report are the same object.
+    """
+
+    def __init__(self, writers, rotation, rotation_actual, rotation_actions):
+        self.writers = writers
+        self.rotation = rotation
+        self.rotation_actual = rotation_actual
+        self.rotation_actions = rotation_actions
+
+    @property
+    def creating(self):
+        return [w for w in self.writers if w.state == "present"]
+
+    @property
+    def deleting(self):
+        return [w for w in self.writers if w.state == "absent"]
+
+    @property
+    def actions(self):
+        """Every action, in the order :meth:`apply` will run them.
+
+        Not input order. A plan that claims one order and executes another is
+        worse than no plan at all.
+        """
+        return ([a for w in self.creating for a in w.actions]
+                + self.rotation_actions
+                + [a for w in self.deleting for a in w.actions])
+
+    @property
+    def blocked(self):
+        """Diagnostic actions. Any of these means the run must not proceed."""
+        return [a for a in self.actions if a.kind.startswith("blocked_")]
+
+    @property
+    def changed(self):
+        return bool(self.actions)
+
+    def diff(self):
+        """Before/after blocks for Ansible's ``--diff``, one per changing object.
+
+        Ansible renders a list of diffs natively, and per-object blocks read far
+        better than one merged document when several writers change at once.
+        """
+        diffs = [w.diff() for w in self.creating + self.deleting if w.changed]
+        if self.rotation_actions:
+            diffs.append(rotation_diff(self.rotation, self.rotation_actual))
+        return diffs
+
+    def apply(self, client):
+        """Apply the plan in three phases, returning phase-2 failures.
+
+        1. Create and configure every ``present`` writer, then rotation.
+        2. Read all of it back.
+        3. Delete the ``absent`` writers - but only if step 2 found nothing
+           wrong.
+
+        The phase boundary is the point of the whole arrangement. A run that
+        stands up a replacement writer and retires the one it replaces cannot
+        delete the old writer on a run where the new one failed to appear. That
+        is not a theoretical failure: on this protocol one wrong init parameter
+        produces exactly that, and reports it as silence.
+
+        A non-empty return therefore means phase 3 did NOT run and the device
+        still holds everything the deletes would have removed. A phase-3
+        failure raises instead, because nothing follows it to gate.
+        """
+        for writer in self.creating:
+            apply_plan(client, writer.desired, writer.actions)
+        apply_rotation(client, self.rotation_actions)
+
+        failures = []
+        for writer in self.creating:
+            if not writer.changed:
+                continue
+            try:
+                writer.actual = verify(client, writer.desired,
+                                       purge_subscriptions=writer.purge)
+                writer.verified = True
+            except SapV2VerifyError as exc:
+                failures.append(str(exc))
+
+        if self.rotation_actions:
+            try:
+                self.rotation_actual = verify_rotation(client, self.rotation)
+            except SapV2VerifyError as exc:
+                failures.append(str(exc))
+
+        if failures:
+            return failures
+
+        for writer in self.deleting:
+            apply_plan(client, writer.desired, writer.actions)
+        for writer in self.deleting:
+            if writer.changed:
+                writer.actual = verify(client, writer.desired)
+                writer.verified = True
+        return []
+
+
+def plan_device(client, writers, rotation=None, on_immutable_change="fail"):
+    """Read every writer plus rotation and plan the whole device. Reads only."""
+    rotation = rotation or {}
+    planned = []
+    for entry in writers:
+        actual = read_actual(client, entry["name"], entry["type"])
+        planned.append(WriterPlan(entry, actual, plan(
+            entry, actual,
+            on_immutable_change=on_immutable_change,
+            purge_subscriptions=entry.get("subscriptions_purge", False))))
+
+    rotation_actual = read_rotation(client) if rotation else {}
+    return DevicePlan(planned, rotation, rotation_actual,
+                      plan_rotation(rotation, rotation_actual))
