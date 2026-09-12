@@ -9,6 +9,7 @@ strictly after the create has been read back. On this protocol a failed create
 is reported as silence, so an ordering bug here would delete a working writer to
 make room for one that never arrived.
 """
+import re
 import unittest
 
 from loader import logs
@@ -81,8 +82,17 @@ class FakeDevice(object):
         return self.reads.get(path, {})
 
     def children(self, path):
-        return dict((k, v) for k, v in self.reads.items()
-                    if k.startswith(path + ".") and "." not in k[len(path) + 1:])
+        out = {}
+        for key, value in self.reads.items():
+            if not key.startswith(path + "."):
+                continue
+            rest = key[len(path) + 1:]
+            # A bracket-quoted name contains dots that are NOT separators -
+            # every log_file name does. Counting them naively hides exactly the
+            # case worth testing, so mask the brackets first.
+            if "." not in re.sub(r"\[[^\]]*\]", "", rest):
+                out[key] = value
+        return out
 
     def verbs(self):
         return [(verb, path) for verb, path, _payload in self.writes]
@@ -369,3 +379,114 @@ class TestBooleanNormalisation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestUnmanagedWriters(unittest.TestCase):
+    """Writers the task did not name are ignored unless asked about.
+
+    The scoping to named TYPES is the safety property. A Core PRO ships with
+    around a dozen LogFileWriters of its own, and a purge that swept them up
+    would be silent, immediate and irreversible.
+    """
+
+    def device(self):
+        reads = {
+            "Logs#0.UdpSysLogWriter#alloy_site1": {"Name": "alloy_site1",
+                                                   "RemoteEndpointUri": URI},
+            "Logs#0.UdpSysLogWriter#alloy_site1.MessageLogSettings#0": {},
+            "Logs#0.UdpSysLogWriter#stale_one": {"Name": "stale_one",
+                                                 "RemoteEndpointUri": URI},
+            "Logs#0.UdpSysLogWriter#stale_one.MessageLogSettings#0": {},
+            "Logs#0.TcpClientWriter#legacy": {"Name": "legacy"},
+            "Logs#0.TcpClientWriter#legacy.MessageLogSettings#0": {},
+            "Logs#0.LogRotator#0": {"MinutesBetweenSearch": "15"},
+        }
+        for name in ("Connected_Msg.log", "SAPv2Log.log", "Scenes.log"):
+            reads["Logs#0.LogFileWriter#[%s]" % name] = {"Name": name}
+            reads["Logs#0.LogFileWriter#[%s].MessageLogSettings#0" % name] = {}
+        return FakeDevice(reads)
+
+    def test_list_writers_parses_bracket_quoted_names(self):
+        found = logs.list_writers(self.device())
+        self.assertIn(("log_file", "SAPv2Log.log"), found)
+        self.assertIn(("udp_syslog", "alloy_site1"), found)
+        self.assertIn(("tcp_client", "legacy"), found)
+        # LogRotator#0 is not a writer.
+        self.assertFalse([k for k in found if "rotator" in k[0].lower()])
+
+    def test_ignore_is_the_default_and_looks_at_nothing(self):
+        device = self.device()
+        plan = logs.plan_device(device, [writer("alloy_site1")])
+        self.assertEqual(plan.unmanaged, [])
+        self.assertEqual(plan.actions, [])
+
+    def test_report_lists_them_without_changing_anything(self):
+        device = self.device()
+        plan = logs.plan_device(device, [writer("alloy_site1")],
+                                unmanaged="report")
+        self.assertEqual([u["name"] for u in plan.unmanaged], ["stale_one"])
+        self.assertEqual(plan.unmanaged[0]["action"], "reported")
+        # Reporting is not a change.
+        self.assertEqual(plan.actions, [])
+        self.assertFalse(plan.changed)
+
+    def test_other_types_are_out_of_scope_even_for_purge(self):
+        # The whole point: a task naming a udp_syslog writer must not reason
+        # about the device's own log files or the legacy TCP writer.
+        device = self.device()
+        plan = logs.plan_device(device, [writer("alloy_site1")],
+                                unmanaged="purge")
+        self.assertEqual([u["name"] for u in plan.unmanaged], ["stale_one"])
+        deleted = [a.to_dict()["writer"] for a in plan.actions
+                   if a.kind == "writer_delete"]
+        self.assertEqual(deleted, ["stale_one"])
+
+    def test_purge_skips_what_cannot_be_recreated(self):
+        device = self.device()
+        plan = logs.plan_device(
+            device,
+            [writer("alloy_site1"), writer("keep_me", type="tcp_client", ip=None)],
+            unmanaged="purge")
+        by_name = dict((u["name"], u) for u in plan.unmanaged)
+        self.assertEqual(by_name["stale_one"]["action"], "delete")
+        self.assertEqual(by_name["legacy"]["action"], "skipped")
+        self.assertIn("one-way", by_name["legacy"]["reason"])
+        self.assertNotIn("Logs#0.TcpClientWriter#legacy",
+                         [a.to_dict().get("path") for a in plan.actions])
+
+    def test_purge_deletes_run_after_the_creates_verify(self):
+        device = self.device()
+        plan = logs.plan_device(
+            device,
+            [writer("alloy_site1"), writer("brand_new", ip="192.0.2.50")],
+            unmanaged="purge")
+        kinds = [a.kind for a in plan.actions]
+        self.assertLess(kinds.index("writer_create"), kinds.index("writer_delete"))
+        self.assertEqual(plan.apply(device), [])
+        verbs = device.verbs()
+        self.assertLess(verbs.index(("init", "Logs#0.UdpSysLogWriter")),
+                        verbs.index(("del", "Logs#0.UdpSysLogWriter#stale_one")))
+
+    def test_a_failed_create_stops_the_purge(self):
+        device = FakeDevice(self.device().reads, applied=False)
+        plan = logs.plan_device(
+            device,
+            [writer("alloy_site1"), writer("brand_new", ip="192.0.2.50")],
+            unmanaged="purge")
+        self.assertTrue(plan.apply(device))
+        self.assertNotIn(("del", "Logs#0.UdpSysLogWriter#stale_one"), device.verbs())
+
+    def test_an_empty_writer_list_purges_nothing(self):
+        # No named types means nothing is in scope, so an accidentally empty
+        # list cannot empty a device.
+        device = self.device()
+        plan = logs.plan_device(device, [], unmanaged="purge")
+        self.assertEqual(plan.unmanaged, [])
+        self.assertEqual(plan.actions, [])
+
+    def test_a_purge_delete_is_marked_destructive(self):
+        device = self.device()
+        plan = logs.plan_device(device, [writer("alloy_site1")],
+                                unmanaged="purge")
+        self.assertTrue(all(a.destructive for a in plan.actions
+                            if a.kind == "writer_delete"))

@@ -234,6 +234,32 @@ options:
       - A newly created writer defaults to everything off, so it is inert until
         these are set.
     type: dict
+  unmanaged_writers:
+    description:
+      - What to do about writers on the device that I(writers) does not name.
+      - >-
+        C(ignore) (the default) leaves them completely alone and does not even
+        look. C(report) lists them in the C(unmanaged) return value without
+        changing anything. C(purge) deletes them.
+      - >-
+        All three are scoped to the writer B(types) named in I(writers), and
+        that scoping is a safety property rather than a convenience. A Core PRO
+        ships with around a dozen LogFileWriters of its own; a task managing one
+        C(udp_syslog) writer has no business forming an opinion about those.
+        Measured on a real device - 15 writers present, a playbook naming one -
+        an unscoped purge would delete all 15, while the scoped one deletes
+        exactly the stale writer that was the point.
+      - >-
+        C(purge) never deletes a type that cannot be recreated. A C(tcp_client)
+        is skipped and reported rather than removed, because a purge is the one
+        place a writer would be deleted without anyone naming it, and that
+        deletion would be one-way.
+      - Purge deletions run in the same phase as C(state=absent) entries, so
+        they happen only after every C(present) writer has been read back.
+      - An empty I(writers) names no types, so nothing is ever in scope.
+    type: str
+    choices: [ignore, report, purge]
+    default: ignore
   rotation:
     description:
       - Log rotation and cleanup. C(max_file_size), C(max_count),
@@ -471,6 +497,16 @@ writers:
       description: The writer's MessageLogSettings.
       returned: always
       type: dict
+unmanaged:
+  description:
+    - Writers found on the device that I(writers) did not name, each with the
+      C(action) taken - C(reported), C(delete) or C(skipped).
+    - >-
+      Always empty when I(unmanaged_writers) is C(ignore), which means "not
+      looked for", NOT "there were none".
+  returned: always
+  type: list
+  elements: dict
 rotation:
   description: Rotation settings as read from the device.
   returned: always
@@ -576,6 +612,8 @@ def main():
             message_log_settings=dict(type="dict"),
             rotation=dict(type="dict"),
             startup_script=dict(type="list", elements="str"),
+            unmanaged_writers=dict(type="str", default="ignore",
+                                   choices=["ignore", "report", "purge"]),
             on_immutable_change=dict(type="str", default="fail",
                                      choices=["fail", "replace"]),
             idle_timeout=dict(type="float", default=1.5),
@@ -617,18 +655,21 @@ def main():
 
     result = {"changed": False, "plan": [], "transcript": client.transcript,
               "verified": False, "writers": [], "rotation": {}, "diff": [],
-              "will_revert_at_reboot": [], "startup_script_unparsed": []}
+              "will_revert_at_reboot": [], "startup_script_unparsed": [],
+              "unmanaged": []}
 
     try:
         client.connect(params["username"], params["password"])
 
         planned = plan_device(client, writers, rotation,
-                              on_immutable_change=params["on_immutable_change"])
+                              on_immutable_change=params["on_immutable_change"],
+                              unmanaged=params["unmanaged_writers"])
 
         def read_state():
             """Refresh the parts of the result that a write can change."""
             result["rotation"] = planned.rotation_actual
             result["writers"] = [report(w) for w in planned.writers]
+            result["unmanaged"] = planned.unmanaged
 
         result["plan"] = [action.to_dict() for action in planned.actions]
         # Computed before applying: "before" has to be the state the device was

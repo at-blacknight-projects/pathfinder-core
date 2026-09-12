@@ -1167,11 +1167,16 @@ class DevicePlan(object):
     result: the plan, the diff and the drift report are the same object.
     """
 
-    def __init__(self, writers, rotation, rotation_actual, rotation_actions):
+    def __init__(self, writers, rotation, rotation_actual, rotation_actions,
+                 unmanaged=None):
         self.writers = writers
         self.rotation = rotation
         self.rotation_actual = rotation_actual
         self.rotation_actions = rotation_actions
+        #: Writers on the device that were not named, and what was done about
+        #: them. Empty in the default `ignore` mode - which is not the same as
+        #: "there were none", so the module says which it means.
+        self.unmanaged = unmanaged or []
 
     @property
     def creating(self):
@@ -1263,7 +1268,51 @@ class DevicePlan(object):
         return []
 
 
-def plan_device(client, writers, rotation=None, on_immutable_change="fail"):
+#: What to do about writers on the device that `writers:` does not name.
+UNMANAGED_MODES = ("ignore", "report", "purge")
+
+
+def list_writers(client):
+    """Every writer object under ``Logs#0``, as ``{(type_key, name): path}``.
+
+    Names are bracket-quoted on the wire whenever they contain a ``.``, which
+    every ``log_file`` name does, so the segment is partitioned on ``#`` rather
+    than split on dots. Non-writer children (``LogRotator#0``) are skipped.
+    """
+    by_sap_type = dict((t.sap_type, t) for t in WRITER_TYPES.values())
+    found = {}
+    for path in client.children(LOGS_ROOT):
+        sap_type, _sep, name = path[len(LOGS_ROOT) + 1:].partition("#")
+        wtype = by_sap_type.get(sap_type)
+        if wtype is not None:
+            found[(wtype.key, name.strip("[]"))] = path
+    return found
+
+
+def find_unmanaged(client, desired_writers):
+    """Writers on the device that `desired_writers` does not name.
+
+    **Scoped to the types the task manages**, and that scoping is the safety
+    property rather than a convenience. A Core PRO ships with around a dozen
+    LogFileWriters of its own - Connected_Msg.log, SAPv2Log.log, Scenes.log and
+    the rest. A task that manages one udp_syslog writer has no business forming
+    an opinion about those, and a purge that swept them up would be silent,
+    immediate and irreversible.
+
+    Measured on the sandbox: 15 writers present, a playbook naming one. Blunt
+    purge would delete all 15; scoped to the named type it deletes exactly the
+    one stale writer that was the point.
+    """
+    named = set((entry.get("type") or DEFAULT_WRITER_TYPE, entry["name"])
+                for entry in desired_writers)
+    managed_types = set(key for key, _name in named)
+    return [{"name": name, "type": key, "path": path}
+            for (key, name), path in sorted(list_writers(client).items())
+            if (key, name) not in named and key in managed_types]
+
+
+def plan_device(client, writers, rotation=None, on_immutable_change="fail",
+                unmanaged="ignore"):
     """Read every writer plus rotation and plan the whole device. Reads only."""
     rotation = rotation or {}
     planned = []
@@ -1274,6 +1323,35 @@ def plan_device(client, writers, rotation=None, on_immutable_change="fail"):
             on_immutable_change=on_immutable_change,
             purge_subscriptions=entry.get("subscriptions_purge", False))))
 
+    # `writers` being empty means no managed types, so nothing is in scope -
+    # which also stops an empty list from purging a whole device.
+    found = []
+    if unmanaged != "ignore" and writers:
+        found = find_unmanaged(client, writers)
+        for entry in found:
+            wtype = writer_type(entry["type"])
+            if unmanaged != "purge":
+                entry["action"] = "reported"
+            elif not wtype.replaceable:
+                # The rail that matters more here than anywhere else: a purge
+                # is the one place a writer gets deleted without anyone naming
+                # it. Skip rather than refuse the run - the estate is full of
+                # legacy TCP writers and blocking on them would be obstructive.
+                entry["action"] = "skipped"
+                entry["reason"] = (
+                    "a %s cannot be recreated over SapV2, so purging it would "
+                    "be one-way. Remove it deliberately with state=absent if "
+                    "that is what you want." % wtype.sap_type)
+            else:
+                entry["action"] = "delete"
+                desired = {"name": entry["name"], "type": entry["type"],
+                           "state": "absent", "subscriptions": [],
+                           "message_log_settings": {}, "properties": {},
+                           "subscriptions_purge": False}
+                actual = read_actual(client, entry["name"], entry["type"])
+                planned.append(WriterPlan(desired, actual,
+                                          plan(desired, actual)))
+
     rotation_actual = read_rotation(client) if rotation else {}
     return DevicePlan(planned, rotation, rotation_actual,
-                      plan_rotation(rotation, rotation_actual))
+                      plan_rotation(rotation, rotation_actual), unmanaged=found)
