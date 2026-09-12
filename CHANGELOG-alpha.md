@@ -1,3 +1,20 @@
+## [0.1.0-alpha.10](https://github.com/at-blacknight-projects/pathfinder-core/compare/v0.1.0-alpha.9...v0.1.0-alpha.10) (2026-09-12)
+
+
+### Features
+
+* **logs:** reconcile every writer on a device in one task ([fff2310](https://github.com/at-blacknight-projects/pathfinder-core/commit/fff231046a9def161e0f698b18b3718113d7a231))
+
+
+### Performance
+
+* **sapv2:** terminate reads with $DONE and read subtrees in one command ([14c67fe](https://github.com/at-blacknight-projects/pathfinder-core/commit/14c67fe1b594c1f44437c99e4a8d845faf5bbaa4)), closes [MessageLogSettings#0](https://github.com/at-blacknight-projects/MessageLogSettings/issues/0)
+
+
+### Documentation
+
+* use neutral example addresses throughout ([e3087b3](https://github.com/at-blacknight-projects/pathfinder-core/commit/e3087b3ae03b4ab0bbcee5fec3e55369cb747599))
+
 ## [0.1.0-alpha.9](https://github.com/at-blacknight-projects/pathfinder-core/compare/v0.1.0-alpha.8...v0.1.0-alpha.9) (2026-09-11)
 
 
