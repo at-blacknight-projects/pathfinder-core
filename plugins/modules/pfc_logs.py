@@ -56,8 +56,8 @@ options:
   writers:
     description:
       - The device's log writers, as a list. One session is opened for the
-        whole list, which matters because SapV2 frames replies on an idle gap
-        and a login costs several seconds.
+        whole list, which matters because each session costs a connect, a
+        login and an authentication probe.
       - >-
         Order of execution is not list order. Every C(present) entry is applied
         and read back first, and the C(absent) entries run only once all of
@@ -272,11 +272,29 @@ options:
     default: fail
   idle_timeout:
     description:
-      - Seconds of socket silence taken to mean a reply is complete. SapV2
-        replies have no terminator, so this is the only available framing and
-        every command costs at least this long.
+      - Seconds of socket silence taken to mean a reply is complete.
+      - >-
+        This is the FALLBACK, not the normal path. Reads ask for the SapV2
+        C($DONE) terminator and return the moment it arrives, so this only
+        applies to a firmware that does not echo it - in which case every read
+        costs at least this long again.
     type: float
     default: 1.5
+  write_timeout:
+    description:
+      - Seconds to wait for a reply to a write before taking silence as
+        success.
+      - >-
+        A write returns nothing on measured firmware - including when the value
+        was rejected, the property unknown or the path wrong - so this is a wait
+        for an C(error) reply that almost never comes, and read-back is what
+        actually establishes the write took. Any reply that does come arrives in
+        well under 0.1s, so the default is a wide margin.
+      - >-
+        Writes dominate a from-scratch reconcile (one per subscription), so this
+        is the main remaining lever on how long one takes.
+    type: float
+    default: 0.35
   read_timeout:
     description: Ceiling on collecting a single reply.
     type: float
@@ -556,6 +574,7 @@ def main():
             on_immutable_change=dict(type="str", default="fail",
                                      choices=["fail", "replace"]),
             idle_timeout=dict(type="float", default=1.5),
+            write_timeout=dict(type="float", default=0.35),
             read_timeout=dict(type="float", default=15.0),
         ),
         supports_check_mode=True,
@@ -586,6 +605,7 @@ def main():
         host=params["host"],
         port=params["port"],
         idle_timeout=params["idle_timeout"],
+        write_timeout=params["write_timeout"],
         read_timeout=params["read_timeout"],
         check_mode=module.check_mode,
     )

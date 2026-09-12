@@ -63,14 +63,29 @@ except ImportError:  # pragma: no cover - direct file import in unit tests
 
 DEFAULT_PORT = 9600
 
-#: Seconds of socket silence taken to mean "the reply is complete". SapV2 has no
-#: terminator and no reply to a write, so this idle gap is the only framing we
-#: get. Every command therefore costs at least this long.
+#: Seconds of socket silence taken to mean "the reply is complete".
+#:
+#: This is now the FALLBACK, not the normal path: reads ask for the ``$DONE``
+#: terminator and return the moment it lands (see :data:`DONE_MODIFIER`), so
+#: this only applies to a firmware that does not echo it. It stays generous
+#: because when it is in use it is the only framing there is.
 DEFAULT_IDLE_TIMEOUT = 1.5
 
 #: Absolute ceiling on collecting one reply, in case a subscription firehose
 #: means the socket never actually goes idle.
 DEFAULT_READ_TIMEOUT = 15.0
+
+#: How long to wait for a reply to a WRITE. Writes return nothing - measured,
+#: including for rejected values, unknown properties and unknown paths - so
+#: this is the wait before taking silence as success. Any reply that does come
+#: (an explicit ``error``) has its first byte within ~0.04s on a Core PRO, so
+#: this is a wide margin rather than a tight one.
+DEFAULT_WRITE_TIMEOUT = 0.35
+
+#: How long to wait for the login reply. The device answers immediately when it
+#: answers at all, and silence here is not treated as failure - the inert
+#: session probe in connect() is what actually proves the credential.
+DEFAULT_LOGIN_TIMEOUT = 3.0
 
 DEFAULT_CONNECT_TIMEOUT = 10.0
 
@@ -110,6 +125,47 @@ _ERROR_RE = re.compile(
 #: Enum and boolean values (the RW properties on MessageLogSettings) all match;
 #: subscription expressions, which contain spaces and ``$`` tokens, do not.
 _BARE_VALUE_RE = re.compile(r"^[A-Za-z0-9_.:-]+$")
+
+#: Terminator modifier. Appended to a READ, the device echoes it on the last
+#: line of the reply and nowhere else - so a reply can be recognised as
+#: complete instead of being inferred from a silence.
+#:
+#: Measured on a Core PRO: first byte arrives in ~0.04s and the whole reply
+#: within ~0.05s, after which the client used to sit out the full idle timeout.
+#: With the terminator a read returns as soon as it lands, and idle framing
+#: becomes the fallback rather than the normal path. It also removes a guess:
+#: the reply misattribution this client was bitten by was fundamentally not
+#: knowing where one reply ended.
+#:
+#: It does NOT help writes. Measured: a successful write, a write of a silently
+#: ignored value, a write to an unknown property and a write to an unknown path
+#: all return absolutely nothing, with or without the modifier. Read-back
+#: verification remains the only way to know a write took.
+DONE_MODIFIER = "$DONE"
+
+#: The terminator is appended after the last property SPACE-separated, not
+#: comma-separated, so a naive parse folds it into that property's value:
+#: ``FriendlyName="MessageLogSettings#0" $DONE``. On a subscription that would
+#: make ``Subscription`` compare unequal to the desired expression on every
+#: run, forever. Strip it before parsing.
+_DONE_SUFFIX_RE = re.compile(r"\s*\$DONE\s*$", re.IGNORECASE)
+
+
+def strip_done(line):
+    """Remove a trailing ``$DONE`` terminator from one reply line."""
+    return _DONE_SUFFIX_RE.sub("", line)
+
+
+def has_done(text):
+    """Whether `text` contains a COMPLETE line carrying the terminator.
+
+    The trailing newline matters: without it a chunk boundary landing inside
+    the token would end the read early and truncate the reply.
+    """
+    if not text:
+        return False
+    index = text.upper().rfind(DONE_MODIFIER)
+    return index >= 0 and "\n" in text[index:]
 
 
 class SapV2Error(Exception):
@@ -246,7 +302,7 @@ def parse_properties(payload):
     return props
 
 
-def _normalise_path(path):
+def normalise_path(path):
     """Compare paths ignoring case and bracket-quoting of name segments."""
     return (path or "").replace("#[", "#").replace("]", "").casefold()
 
@@ -287,7 +343,10 @@ def parse_indi(text):
     if not text:
         return result
     for line in text.splitlines():
-        line = line.strip()
+        # Strip the terminator FIRST. It sits after the last property with only
+        # a space before it, so leaving it in appends " $DONE" to that
+        # property's value.
+        line = strip_done(line.strip()).strip()
         if not line or _NONE_RE.match(line):
             continue
         match = _REPLY_RE.match(line)
@@ -392,12 +451,17 @@ class SapV2Client(object):
 
     def __init__(self, host, port=DEFAULT_PORT, connect_timeout=DEFAULT_CONNECT_TIMEOUT,
                  idle_timeout=DEFAULT_IDLE_TIMEOUT, read_timeout=DEFAULT_READ_TIMEOUT,
-                 guard=None, check_mode=False, transcript=None, verify_login=True):
+                 guard=None, check_mode=False, transcript=None, verify_login=True,
+                 write_timeout=DEFAULT_WRITE_TIMEOUT, use_done=True):
         self.host = host
         self.port = port
         self.connect_timeout = connect_timeout
         self.idle_timeout = idle_timeout
         self.read_timeout = read_timeout
+        #: How long to wait for a reply to a WRITE before taking silence as
+        #: success. Much shorter than idle_timeout because a write almost never
+        #: answers and, when it does, answers as fast as anything else.
+        self.write_timeout = write_timeout
         self.guard = default_guard if guard is None else guard
         #: When True every write verb is recorded and skipped. Reads still run,
         #: because drift cannot be computed without them.
@@ -409,6 +473,9 @@ class SapV2Client(object):
         #: Prove the session is authenticated with a read, rather than trusting
         #: the absence of a rejection. See :meth:`connect`.
         self.verify_login = verify_login
+        #: Cleared for the session the first time a read asks for the reply
+        #: terminator and the device does not echo it back.
+        self._done_supported = bool(use_done)
         self._sock = None
 
     # -- session ---------------------------------------------------------
@@ -432,12 +499,23 @@ class SapV2Client(object):
         # A bare CRLF first: the device's line parser may hold a partial line
         # from a previous session, and the login would otherwise be appended to
         # it and silently discarded.
+        #
+        # Then DISCARD whatever that produced, which is normally nothing. This
+        # used to be a full _drain(), which waits read_timeout - 15 seconds -
+        # for a reply to a newline. Nothing ever answers a newline, so every
+        # module invocation opened with a 15 second stall, and a role running
+        # two modules against a device paid it twice.
         self._write(CRLF)
         time.sleep(0.2)
-        self._drain()
+        self._flush()
 
+        # The device DOES answer a login ("login successful", or a failure
+        # string), and answers immediately. So wait briefly for it rather than
+        # the full read ceiling: a firmware that stays silent is not an error
+        # here, because the inert-session probe below is the real check.
         self._write("Login %s %s%s" % (username, password, CRLF))
-        reply = self._drain().strip()
+        reply = self._drain(first_byte_timeout=DEFAULT_LOGIN_TIMEOUT,
+                            idle=self.write_timeout).strip()
         if "fail" in reply.lower() or "denied" in reply.lower():
             raise SapV2AuthError("login rejected by %s: %s" % (self.host, reply[:200]))
         self.transcript.append({"verb": "login", "command": "Login <user> <redacted>",
@@ -493,8 +571,12 @@ class SapV2Client(object):
         except (socket.timeout, socket.error, OSError):
             pass
 
-    def _drain(self, first_byte_timeout=None):
+    def _drain(self, first_byte_timeout=None, expect_done=False, idle=None):
         """Read a reply: wait for it to START, then read until it goes quiet.
+
+        With `expect_done`, "goes quiet" is replaced by "carries the terminator"
+        and the read returns the moment it arrives. Idle framing stays as the
+        fallback, for a firmware that does not echo it.
 
         Two different timeouts, and the distinction is load-bearing. Replies
         have no terminator, so an idle gap is the only frame boundary - but a
@@ -530,12 +612,14 @@ class SapV2Client(object):
             if not started:
                 started = True
                 try:
-                    self._sock.settimeout(self.idle_timeout)
+                    self._sock.settimeout(self.idle_timeout if idle is None else idle)
                 except (socket.error, OSError):
                     pass
+            if expect_done and has_done(buf.decode("utf-8", "replace")):
+                break
         return buf.decode("utf-8", "replace")
 
-    def execute(self, command, is_write=False):
+    def execute(self, command, is_write=False, expect_done=False):
         """Send one raw command and return its raw reply text.
 
         Prefer the typed verbs below. This exists for genuinely ad-hoc use and
@@ -550,7 +634,29 @@ class SapV2Client(object):
         # residual partial line in the device parser between commands.
         self._flush()
         self._write(CRLF + command + CRLF)
-        return self._drain()
+        return self._drain(expect_done=expect_done)
+
+    def _read(self, command):
+        """Issue a read, using the reply terminator where the device echoes it.
+
+        Every read asks for it. If the first one comes back without it this
+        firmware does not support the modifier, so stop asking for the rest of
+        the session and fall back to idle-gap framing - correct, just slower.
+        """
+        if not self._done_supported:
+            return self.execute(command)
+        raw = self.execute("%s %s" % (command, DONE_MODIFIER), expect_done=True)
+        if has_done(raw):
+            return raw
+        self._done_supported = False
+        self.transcript.append({
+            "verb": "note", "write": False,
+            "command": "$DONE not echoed by this device; falling back to "
+                       "idle-gap framing for the rest of the session"})
+        # Re-issue without the modifier rather than trusting a reply the device
+        # may have rejected outright. Reads are idempotent, so this costs only
+        # time, and only once.
+        return self.execute(command)
 
     def _write_command(self, command, verb, target, properties=None):
         self.guard.assert_writable(target, verb=verb, properties=properties)
@@ -563,25 +669,37 @@ class SapV2Client(object):
         self._write(CRLF + command + CRLF)
         # Drain anyway. A write is normally silent, but it can return an
         # explicit `error ... $STATUS=...`, and leaving bytes unread would
-        # desynchronise the next command. Only a short wait for it to begin,
-        # since silence is the expected case.
-        return self._drain(first_byte_timeout=self.idle_timeout)
+        # desynchronise the next command.
+        #
+        # This waits `write_timeout`, not `idle_timeout`. Measured on a Core
+        # PRO, any reply's first byte arrives in ~0.04s, so waiting 1.5s for
+        # one that is almost never coming was most of the cost of a write-heavy
+        # run. The terminator does not help here - writes return nothing at all,
+        # even when rejected - so this is a straight bet that silence means
+        # success, which read-back verification then checks. A late reply is
+        # discarded by the _flush() before the next command rather than
+        # misattributed to it.
+        return self._drain(first_byte_timeout=self.write_timeout)
 
     # -- read verbs ------------------------------------------------------
 
     def get(self, path, prop=None):
         """Read one object's properties. Returns ``{}`` for an unknown path."""
         command = "get %s %s" % (path, prop) if prop else "get %s" % path
-        parsed = parse_indi(self.execute(command))
+        return self._pick(parse_indi(self._read(command)), path)
+
+    @staticmethod
+    def _pick(parsed, path):
+        """One object out of a parsed reply, matched on path and nothing else."""
         if path in parsed:
             return parsed[path]
         # Match only on a normalised form of the SAME path - never on "there
         # was exactly one reply". An earlier version did the latter, and when
         # a reply was misattributed it cheerfully returned a different
         # object's properties as though they belonged to this path.
-        wanted = _normalise_path(path)
+        wanted = normalise_path(path)
         for reply_path, props in parsed.items():
-            if _normalise_path(reply_path) == wanted:
+            if normalise_path(reply_path) == wanted:
                 return props
         return {}
 
@@ -590,9 +708,37 @@ class SapV2Client(object):
 
         The trailing ``.`` is what makes this a listing rather than a read; the
         parent itself is filtered out of the result.
+
+        ⚠️ A listing carries PATHS ONLY - measured on a Core PRO, the child
+        entries come back with no properties at all. To read children's
+        properties use :meth:`tree`, which gets them in the same command.
         """
-        listing = parse_indi(self.execute("get %s." % path))
+        listing = parse_indi(self._read("get %s." % path))
         return dict((k, v) for k, v in listing.items() if k != path)
+
+    def tree(self, path, depth=-1, include_self=True):
+        """Read an object AND its descendants, in as few commands as possible.
+
+        ``$MAX_DEPTH=-1`` returns everything below the path, so this replaces a
+        listing plus one read per child. Measured on a Core PRO: a writer with
+        27 subscriptions is 30 commands read child-by-child and 2 this way, and
+        the whole of ``Logs#0`` - 118 objects across 16 writers, with their
+        properties - comes back in a single 37KB reply.
+
+        ⚠️ ``$MAX_DEPTH`` means strictly BELOW: the reply does NOT include the
+        object named in the request. Measured, and worth knowing because the
+        failure is silent - the caller simply finds nothing at its own path and
+        concludes the object does not exist. Hence the second read, unless the
+        caller already has the properties from somewhere else.
+
+        Returns ``{path: {prop: value}}``.
+        """
+        found = parse_indi(self._read("get %s $MAX_DEPTH=%d" % (path, depth)))
+        if include_self and not self._pick(found, path):
+            own = self.get(path)
+            if own:
+                found[path] = own
+        return found
 
     def rfs(self, path, prop=None):
         """Read the live schema for an object: ``{prop: {ReadWrite, SyntaxType}}``.
@@ -602,7 +748,7 @@ class SapV2Client(object):
         you what is creatable — only what an existing object allows.
         """
         command = "rfs %s %s" % (path, prop) if prop else "rfs %s" % path
-        return parse_schema(self.execute(command))
+        return parse_schema(self._read(command))
 
     def constructor(self, path):
         """Return the ``init`` command that would recreate `path`, or None.

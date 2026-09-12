@@ -35,12 +35,14 @@ try:
     from .sapv2 import (
         SapV2VerifyError,
         join_path,
+        normalise_path,
         quote_path_segment,
     )
 except ImportError:  # pragma: no cover - direct file import in unit tests
     from sapv2 import (  # type: ignore
         SapV2VerifyError,
         join_path,
+        normalise_path,
         quote_path_segment,
     )
 
@@ -403,33 +405,62 @@ class Action(object):
 def read_actual(client, writer_name, wtype=DEFAULT_WRITER_TYPE):
     """Read the current state of one writer into a plain dict.
 
+    ONE command. ``$MAX_DEPTH=-1`` returns the writer, every subscription under
+    it and its MessageLogSettings in a single reply, so this does not grow with
+    the subscription count. Read child-by-child it was ``3 + N`` commands, each
+    costing a framing wait - 30 of them for the estate's 27-subscription
+    catalogue, on both the planning read and the verification read.
+
+    Falls back to the per-object reads if the deep read comes back with only
+    the writer itself, which is what a firmware without ``$MAX_DEPTH`` would
+    produce.
+
     Returns ``{"exists": False}`` when the writer is absent, which is a
     different thing from a writer that exists with no subscriptions.
     """
     path = writer_path(writer_name, wtype)
-    properties = client.get(path)
+    absent = {"exists": False, "properties": {}, "subscriptions": {},
+              "message_log_settings": {}}
+
+    tree = client.tree(path) if hasattr(client, "tree") else {}
+    properties = _match(tree, path)
     if not properties:
-        return {"exists": False, "properties": {}, "subscriptions": {},
-                "message_log_settings": {}}
+        # Either the writer is gone, or this client cannot do a deep read.
+        properties = client.get(path)
+        if not properties:
+            return absent
+        tree = {}
 
+    settings = _match(tree, settings_path(writer_name, wtype))
     subscriptions = {}
-    for child_path, child_props in client.children(path).items():
-        segment = child_path.rsplit(".", 1)[-1]
-        if not segment.startswith(SUBSCRIPTION_TYPE + "#"):
-            continue
-        typeid = segment.split("#", 1)[1].strip("[]")
-        # The listing may be shallow, so read the object for its full property
-        # set rather than trusting whatever the children reply happened to
-        # include.
-        full = client.get(child_path) or child_props
-        subscriptions[str(typeid)] = full
+    for obj_path, props in tree.items():
+        segment = obj_path.rsplit(".", 1)[-1]
+        if segment.startswith(SUBSCRIPTION_TYPE + "#"):
+            subscriptions[segment.split("#", 1)[1].strip("[]")] = props
 
-    return {
-        "exists": True,
-        "properties": properties,
-        "subscriptions": subscriptions,
-        "message_log_settings": client.get(settings_path(writer_name, wtype)),
-    }
+    if not tree:
+        # Fallback path: a listing carries paths only, so each child still
+        # needs its own read.
+        for child_path in client.children(path):
+            segment = child_path.rsplit(".", 1)[-1]
+            if segment.startswith(SUBSCRIPTION_TYPE + "#"):
+                typeid = segment.split("#", 1)[1].strip("[]")
+                subscriptions[str(typeid)] = client.get(child_path)
+        settings = client.get(settings_path(writer_name, wtype))
+
+    return {"exists": True, "properties": properties,
+            "subscriptions": subscriptions, "message_log_settings": settings}
+
+
+def _match(tree, path):
+    """One object out of a deep read, matched on path and nothing else."""
+    if path in tree:
+        return tree[path]
+    wanted = normalise_path(path)
+    for obj_path, props in tree.items():
+        if normalise_path(obj_path) == wanted:
+            return props
+    return {}
 
 
 def plan(desired, actual, on_immutable_change="fail", purge_subscriptions=False):

@@ -58,18 +58,21 @@ class TestConstructorIsAHiddenProperty(unittest.TestCase):
             self.reply = reply
             self.commands = []
 
-        def execute(self, command, is_write=False):
+        def execute(self, command, is_write=False, expect_done=False):
             self.commands.append(command)
             return self.reply
 
     def test_requested_by_property_name(self):
         client = self.FakeClient(
             'indi Users#0.SapUser#Admin '
-            'Constructor="%BeginEncap%init Users#0.SapUser Username=Admin"')
+            'Constructor="%BeginEncap%init Users#0.SapUser Username=Admin" $DONE\r\n')
         value = client.constructor("Users#0.SapUser#Admin")
-        # Asked for as a property on a get, not as a verb.
-        self.assertEqual(client.commands, ["get Users#0.SapUser#Admin Constructor"])
-        # And the encapsulation wrapper is removed for the caller.
+        # Asked for as a property on a get, not as a verb. The reply terminator
+        # rides along on every read.
+        self.assertEqual(client.commands,
+                         ["get Users#0.SapUser#Admin Constructor $DONE"])
+        # And the encapsulation wrapper is removed for the caller - with the
+        # terminator stripped first, or it would be inside the quoted value.
         self.assertEqual(value, "init Users#0.SapUser Username=Admin")
 
     def test_unsupported_type_returns_none(self):
@@ -137,7 +140,7 @@ class TestInertSessionIsDetected(unittest.TestCase):
         self.assertIn("inert", str(ctx.exception))
 
     def test_live_session_probe_succeeds(self):
-        client = self._client([b'indi System#0 Ready="True"\r\n'])
+        client = self._client([b'indi System#0 Ready="True" $DONE\r\n'])
         self.assertEqual(client.get("System#0"), {"Ready": "True"})
 
     def test_verify_login_can_be_disabled(self):
@@ -217,7 +220,7 @@ class TestReplyMisattribution(unittest.TestCase):
         client = sapv2.SapV2Client(host="unused")
 
         class Desynced(object):
-            def execute(self, command, is_write=False):
+            def execute(self, command, is_write=False, expect_done=False):
                 return 'indi Logs#0 Ready="True", SkipCleanLogs="False"'
 
         client.execute = Desynced().execute
@@ -226,12 +229,12 @@ class TestReplyMisattribution(unittest.TestCase):
 
     def test_get_accepts_a_bracket_normalised_form_of_the_same_path(self):
         client = sapv2.SapV2Client(host="unused")
-        client.execute = lambda command, is_write=False: (
+        client.execute = lambda command, is_write=False, expect_done=False: (
             'indi Logs#0.LogFileWriter#[a.log] Name="a.log"')
         self.assertEqual(
             client.get("Logs#0.LogFileWriter#[a.log]"), {"Name": "a.log"})
 
     def test_get_is_case_insensitive_on_the_path_only(self):
         client = sapv2.SapV2Client(host="unused")
-        client.execute = lambda command, is_write=False: 'indi system#0 Ready="True"'
+        client.execute = lambda command, is_write=False, expect_done=False: 'indi system#0 Ready="True"'
         self.assertEqual(client.get("System#0"), {"Ready": "True"})

@@ -19,12 +19,54 @@ Replies are `indi <path> Prop="value", Prop2="value"`. Appending `.` to a path
 lists children. An unknown path replies `indi NONE`.
 
 The port sends **no banner** and ignores commands issued before login, so a
-naive probe looks like a dead port. There is no reply terminator either, so an
-idle gap is the only frame boundary — which is why every command costs at least
-the client's idle timeout.
+naive probe looks like a dead port.
 
-A children listing returns paths with **empty property dicts**, so the
-properties of each child must be fetched individually.
+A children listing returns paths with **empty property dicts** — measured, the
+child entries carry no properties at all. Fetching each child individually is
+one way to fill them in; `$MAX_DEPTH` below is the better one.
+
+## Framing: `$DONE` terminates a reply
+
+A reply has no terminator *by default*, so an idle gap is the fallback frame
+boundary and an unterminated command costs at least the client's idle timeout.
+**Appending `$DONE` to a read removes that**: the device echoes the token on the
+last line of the reply and nowhere else, so the read returns as soon as it lands.
+
+Measured on a Core PRO: first byte in ~0.04s, whole reply within ~0.05s, against
+a 1.5s idle timeout — so roughly 97% of every read was spent waiting to find out
+the reply had already finished.
+
+It also removes a guess. The reply misattribution this client was bitten by —
+`get System#0` returning another object's properties — was fundamentally not
+knowing where one reply ended and the next began.
+
+Three things to know:
+
+- **It corrupts the last property unless stripped.** The token is appended after
+  the last property *space*-separated, not comma-separated, so a naive parse
+  folds it into that value: `FriendlyName="MessageLogSettings#0" $DONE`. On a
+  subscription that means `Subscription` never matches the desired expression
+  again.
+- **An empty result is terminated too**: an unknown path answers
+  `indi NONE $DONE`, so even a miss returns immediately. Reading a writer that
+  does not exist is the hot path of every create.
+- **It does nothing for writes.** Measured: a successful write, a write of a
+  silently ignored value, a write to an unknown property and a write to an
+  unknown path all return *absolutely nothing*, with or without the modifier.
+
+## `$MAX_DEPTH` reads a subtree in one command
+
+`get <path> $MAX_DEPTH=-1` returns every object below `<path>`, with properties.
+One writer with 27 subscriptions is 30 commands read child-by-child and one this
+way; the whole of `Logs#0` — 118 objects across 16 writers — comes back as a
+single 37KB reply.
+
+⚠️ **It means strictly BELOW.** The reply does *not* include the object named in
+the request, so a caller looking for its own path finds nothing and concludes the
+object does not exist. That failure is silent and it planned a redundant create
+before it was spotted. Read the object itself separately, or query the parent.
+
+Valid on `get`, `sub` and `rfs`.
 
 Operators: `SET GET INDI SUB UNSUB RFS SFR INIT NEW DEL LED NOP SYNC LOGIN`,
 plus untargeted `LOGOUT EXIT QUIT`. Note `constructor` is **not** an operator.
