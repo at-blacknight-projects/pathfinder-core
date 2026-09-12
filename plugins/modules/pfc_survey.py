@@ -84,7 +84,7 @@ author:
 EXAMPLES = r"""
 - name: Survey the sandbox device and save the snapshot
   at_blacknight.pathfinder_core.pfc_survey:
-    host: dev-vdm-001.example.net
+    host: pfc-sandbox.example.net
     username: "{{ lookup('env', 'PFC_USER') }}"
     password: "{{ lookup('env', 'PFC_PASS') }}"
   register: pfc_schema
