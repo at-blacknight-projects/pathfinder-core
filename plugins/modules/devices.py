@@ -11,7 +11,7 @@ __metaclass__ = type
 DOCUMENTATION = r"""
 ---
 module: devices
-short_description: Manage Devices#0 definitions on a PathfinderCore PRO (NOT IMPLEMENTED)
+short_description: STUB, always fails - Devices#0 device definitions
 version_added: "0.1.0"
 description:
   - B(This module is a stub and always fails.) It exists to hold the design

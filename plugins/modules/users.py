@@ -11,7 +11,7 @@ __metaclass__ = type
 DOCUMENTATION = r"""
 ---
 module: users
-short_description: Manage SapV2 accounts on a PathfinderCore PRO (NOT IMPLEMENTED)
+short_description: STUB, always fails - SapV2 accounts on a PathfinderCore PRO
 version_added: "0.1.0"
 description:
   - B(This module is a stub and always fails.) It exists to hold the design

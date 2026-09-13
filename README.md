@@ -23,16 +23,31 @@ so it can be unit-tested without Ansible.
 **Layer 2 — per-subtree reconcilers that opt in**, each with its own identity
 key, its own immutability rules and its own verification scope.
 
+## What you can actually use today
+
+**Two modules reconcile, one reports, three are stubs that always fail.**
+
 | Module | Subtree | Status |
 |---|---|---|
-| `logs` | `Logs#0` | **Implemented.** Writers, subscriptions, MessageLogSettings |
-| `survey` | any | **Implemented.** Read-only schema introspection |
-| `users` | `Users#0` | Stub — schema measured, design unblocked |
-| `access` | `System#0.Access#0` | Stub — and it will be a *reporter*, see below |
-| `devices` | `Devices#0` | Stub |
+| `logs` | `Logs#0` (SapV2) | ✅ **Reconciles.** Writers of all four types, their subscriptions, MessageLogSettings and log rotation |
+| `startup_script` | the Advanced options script (HTTP) | ✅ **Reconciles.** The boot-time command list, as a document |
+| `survey` | any | ✅ **Reports.** Read-only `rfs`/`Constructor` introspection; writes nothing |
+| `users` | `Users#0` | ⛔ **Stub.** Fails on invocation. Schema measured, design unblocked |
+| `access` | `System#0.Access#0` | ⛔ **Stub**, and it will be a *reporter* — `SecurityJson` is read-only on the device |
+| `devices` | `Devices#0` | ⛔ **Stub.** Needs a survey of the real schema first |
 
-Logs was implemented first deliberately: the worst case for getting it wrong is
-losing logs, not losing air.
+The stubs are not silent no-ops. They `fail_json` with the constraints already
+measured for that subtree, because a stub that reported `changed=false` would
+let a playbook believe it had reconciled accounts.
+
+`logs` was implemented first deliberately: the worst case for getting it wrong
+is losing logs, not losing air. `startup_script` exists because that script is
+the device's real boot-time state and lives on a different transport entirely —
+see below.
+
+Everything else in this README describes those three. If you are looking for
+memory slots, routers, scenes or logic flows, they are not here; the boundary
+registry has an entry for each saying why, and several say "never".
 
 ## The runtime/config boundary
 
@@ -134,6 +149,40 @@ be set per writer or once at task level. Omitting one inherits the task-level
 value; setting it to an empty list or dict does not, so a writer can opt out of
 a shared catalogue with `subscriptions: []`.
 
+## The startup script is on a different transport
+
+`startup_script` is the odd one out: it speaks **HTTP to the web admin**, not
+SapV2. That is not a design preference, it is where the thing lives.
+
+A PathfinderCore's "Advanced options" page holds a list of SapV2 commands the
+device **replays at every boot**. It is the device's real boot-time desired
+state — and it is not in the SapV2 object tree at all. Every root was
+enumerated looking for it; nothing holds it. So anything that page sets will be
+reasserted at the next restart regardless of what was written over SapV2, and
+the only way to change it is the web admin.
+
+```yaml
+- name: Report the script, and what the device is not actually running
+  at_blacknight.pathfinder_core.startup_script:
+    host: "{{ inventory_hostname }}"
+    port: 443
+    compare_live: true        # also read the objects it touches over SapV2
+  register: script
+```
+
+Omit `lines` and it only reports: the script, the factory reference the page
+carries, boot-versus-live drift, lines targeting properties the device does not
+expose, and lines it could not parse. Supply `lines` and it becomes the desired
+state.
+
+⚠️ **The save replaces the whole document.** There is no per-line API, so
+`lines` must be the complete script — anything omitted is deleted from the
+device. The module refuses an empty save rather than treating it as "clear it".
+
+Because this is the boot-time state, `logs` accepts the same script as an
+advisory `startup_script:` parameter purely so it can warn you when a value it
+is about to set is one the script will undo at the next restart.
+
 ## Protocol notes
 
 The hard-won details — framing, why `init` parameter names are not property
@@ -188,10 +237,24 @@ case-insensitively at the start of any line, so a wrapped sentence beginning
 
 ## Status
 
-Version 0.1.0. `logs` has been exercised end to end against a Core PRO:
-check-mode planning, create, read-back verification, idempotent re-run,
-refusal of an immutable endpoint change, detection of a silently-ignored
-value, read-only-field replacement, and delete.
+Pre-1.0, on the `alpha` channel. **`logs` and `startup_script` are the only
+modules that change anything; `survey` reports; `users`, `access` and `devices`
+fail on invocation.**
+
+`logs` has been exercised end to end against a Core PRO: check-mode planning,
+create for every writer type, read-back verification, idempotent re-run,
+refusal of an immutable endpoint change, detection of a silently-ignored value,
+read-only-field replacement, an ordered create-then-delete cutover, and delete.
+Every RW property the device reports under `Logs#0` is either managed or
+deliberately refused as runtime state — checked by diffing an `rfs` of each
+object against the module rather than by inspection.
+
+`startup_script` has been round-tripped against a real device: one line
+changed, the other fourteen preserved, and the original restored byte-exact.
+
+**Not proven: log delivery.** Everything above establishes that the device's
+configuration is what was asked for. Whether syslog then arrives at a collector
+is a separate question, and the sandbox used for this work cannot reach one.
 
 ## Licence
 

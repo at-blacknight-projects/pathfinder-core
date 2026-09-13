@@ -11,7 +11,7 @@ __metaclass__ = type
 DOCUMENTATION = r"""
 ---
 module: survey
-short_description: Read-only schema survey of a PathfinderCore object tree
+short_description: READ-ONLY schema survey of a PathfinderCore object tree
 version_added: "0.1.0"
 description:
   - Walks a PathfinderCore PRO object tree and records each object type's

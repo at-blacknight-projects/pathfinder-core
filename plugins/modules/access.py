@@ -11,7 +11,7 @@ __metaclass__ = type
 DOCUMENTATION = r"""
 ---
 module: access
-short_description: Manage System#0.Access#0 security config (NOT IMPLEMENTED)
+short_description: STUB, always fails - System#0.Access#0 security config
 version_added: "0.1.0"
 description:
   - B(This module is a stub and always fails.) It exists to hold the design
