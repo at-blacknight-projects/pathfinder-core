@@ -1,3 +1,16 @@
+## [0.1.0-alpha.11](https://github.com/at-blacknight-projects/pathfinder-core/compare/v0.1.0-alpha.10...v0.1.0-alpha.11) (2026-09-13)
+
+
+### Features
+
+* **logs:** decide what happens to writers nobody named ([ea5351b](https://github.com/at-blacknight-projects/pathfinder-core/commit/ea5351bc9b1f1d0ac319ad804993c2511357d317))
+
+
+### Bug Fixes
+
+* **logs:** manage SkipWebClientSapMessages, refuse Logs[#0](https://github.com/at-blacknight-projects/pathfinder-core/issues/0).Ready ([29c704c](https://github.com/at-blacknight-projects/pathfinder-core/commit/29c704cf7104613b7ea02b6dccfc5584cb557cf4))
+* **logs:** tcp_client IS creatable - autoReconnect was the missing parameter ([7d62a31](https://github.com/at-blacknight-projects/pathfinder-core/commit/7d62a31c4c28ae4c14b9d8f1b6b0f40197e91e23))
+
 ## [0.1.0-alpha.10](https://github.com/at-blacknight-projects/pathfinder-core/compare/v0.1.0-alpha.9...v0.1.0-alpha.10) (2026-09-12)
 
 
