@@ -1,3 +1,10 @@
+## [0.1.0-alpha.14](https://github.com/at-blacknight-projects/pathfinder-core/compare/v0.1.0-alpha.13...v0.1.0-alpha.14) (2026-09-13)
+
+
+### Bug Fixes
+
+* **sapv2:** strip every echoed modifier, not only $DONE ([afb7516](https://github.com/at-blacknight-projects/pathfinder-core/commit/afb7516e8a68b4b06a9350e755828d7aa0e93b9e)), closes [MessageLogSettings#0](https://github.com/at-blacknight-projects/MessageLogSettings/issues/0)
+
 ## [0.1.0-alpha.13](https://github.com/at-blacknight-projects/pathfinder-core/compare/v0.1.0-alpha.12...v0.1.0-alpha.13) (2026-09-13)
 
 
