@@ -102,7 +102,13 @@ WRITE_VERBS = frozenset(["set", "init", "del", "new"])
 #: proven against a live Core PRO; anything not listed is quoted, which is the
 #: conservative choice for free-text values. If you add a name, prove it first
 #: and verify the object by read-back afterwards.
-INIT_BARE_PARAMS = frozenset(["name", "ip", "port", "typeid", "severity"])
+INIT_BARE_PARAMS = frozenset([
+    "name", "ip", "port", "typeid", "severity",
+    # A TcpClientWriter is created with `autoReconnect=True` bare. It is the
+    # parameter that makes that type creatable at all, and the whole table
+    # exists because a wrongly-rendered init is a silent no-op.
+    "autoreconnect",
+])
 
 _NONE_RE = re.compile(r"^\s*(?:indi|sfr)\s+NONE\s*$", re.IGNORECASE | re.MULTILINE)
 _REPLY_RE = re.compile(r"^\s*(indi|sfr)\s+(\S+)\s*(.*)$", re.IGNORECASE)
@@ -430,7 +436,11 @@ def render_init_params(params):
         # protocol that ignores malformed input silently, matching the proven
         # form matters more than emitting the tidiest one. So the table decides,
         # not the value.
-        if key in INIT_BARE_PARAMS:
+        # Matched case-insensitively: init parameter names are, and the device's
+        # own Constructor output mixes conventions (Username, slotName,
+        # autoReconnect), so the table must not depend on which one a caller
+        # happened to write.
+        if key.lower() in INIT_BARE_PARAMS:
             rendered.append("%s=%s" % (key, render_value(value, bare=True)))
         else:
             rendered.append("%s=%s" % (key, quote_value(value)))
@@ -639,13 +649,23 @@ class SapV2Client(object):
     def _read(self, command):
         """Issue a read, using the reply terminator where the device echoes it.
 
-        Every read asks for it. If the first one comes back without it this
-        firmware does not support the modifier, so stop asking for the rest of
-        the session and fall back to idle-gap framing - correct, just slower.
+        Every read asks for it. If a reply comes back WITHOUT it, this firmware
+        does not support the modifier, so stop asking for the rest of the
+        session and fall back to idle-gap framing - correct, just slower.
+
+        An EMPTY reply proves nothing and must not trigger that. It usually
+        means the read timed out, and the device has at least one way to block
+        a read for tens of seconds: creating a TcpClientWriter makes it attempt
+        the outbound connection, and subsequent reads queue behind that. An
+        earlier version treated empty as "not supported", so one slow read
+        permanently degraded the session to idle framing - and, because the
+        fallback re-issues the command, doubled the wait that caused it.
         """
         if not self._done_supported:
             return self.execute(command)
         raw = self.execute("%s %s" % (command, DONE_MODIFIER), expect_done=True)
+        if not raw.strip():
+            return raw
         if has_done(raw):
             return raw
         self._done_supported = False

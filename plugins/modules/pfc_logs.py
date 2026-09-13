@@ -93,10 +93,14 @@ options:
           - C(udp_syslog) - the only type emitting syslog framing, and the only
             one with in-band identity. UDP, port 514 fixed. Requires I(ip).
             Creatable.
-          - C(tcp_client) - the device connects out. Plain text, no header or
-            tag. B(Cannot be created) - every known init form is silently
-            ignored by the device - so an existing one can be configured and
-            deleted, but not made. This is the legacy path being retired.
+          - >-
+            C(tcp_client) - the device connects out. Plain text, no header or
+            tag, so nothing identifies the sender once traffic is NATted; prefer
+            C(udp_syslog) for new work. Creatable, and requires I(ip). Creating
+            one makes the device dial out immediately and its replies queue
+            behind that, so the create and its read-back can take ~30 seconds
+            against an endpoint that is not listening. That is the device, not
+            a timeout to tune.
           - C(tcp_listener) - the device listens and a collector connects in.
             Plain text. Requires I(port); creating one without it yields an
             object with no properties that can only be deleted. Creatable.

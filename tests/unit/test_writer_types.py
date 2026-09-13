@@ -6,6 +6,7 @@ Each type differs in ways that were measured on hardware rather than assumed,
 and every one of those differences is a way to break a device quietly. These
 lock them in.
 """
+import contextlib
 import unittest
 
 from loader import logs, sapv2, subtrees
@@ -67,32 +68,40 @@ class TestCreation(unittest.TestCase):
         self.assertEqual(wt.init_params(desired(type="log_file", ip=None, name="x.log")),
                          [("name", "x.log")])
 
-    def test_tcp_client_is_not_creatable(self):
-        # Nine init vocabularies were tried on hardware; all no-ops.
-        self.assertFalse(logs.writer_type("tcp_client").creatable)
+    def test_tcp_client_is_creatable_with_autoreconnect(self):
+        # This type was recorded as impossible on the strength of nine
+        # parameter vocabularies that all silently no-op'd. Every one of them
+        # was missing autoReconnect, which turns out to be load-bearing:
+        # name+ip+port no-ops, name+ip+port+autoReconnect creates.
+        wtype = logs.writer_type("tcp_client")
+        self.assertTrue(wtype.creatable)
+        params = dict(wtype.init_params(
+            {"name": "w", "ip": "192.0.2.99", "port": 1515}))
+        self.assertEqual(params["autoReconnect"], True)
+        self.assertEqual(params["ip"], "192.0.2.99")
+        self.assertEqual(params["port"], 1515)
 
-    def test_planning_a_missing_tcp_client_is_blocked_not_attempted(self):
-        actions = logs.plan(desired(type="tcp_client", ip=None), absent_actual())
-        self.assertEqual([a.kind for a in actions], ["blocked_uncreatable"])
-        self.assertIn("cannot be created", actions[0].summary)
+    def test_autoreconnect_renders_bare(self):
+        # Quoting an init parameter the device wants bare is a silent no-op,
+        # which is the whole reason the render table exists.
+        rendered = sapv2.render_init_params(
+            logs.writer_type("tcp_client").init_params(
+                {"name": "w", "ip": "192.0.2.99", "port": 1515}))
+        self.assertIn("autoReconnect=True", rendered)
+        self.assertNotIn('autoReconnect="True"', rendered)
+
+    def test_a_tcp_client_without_an_ip_is_refused(self):
+        # name= alone DOES create something on hardware - an object pointing at
+        # a stale address on port 0. Same zombie shape as a tcp_listener made
+        # without a port, so it is refused rather than left behind.
+        self.assertTrue(logs.validate_writer(desired(type="tcp_client", ip=None)))
 
     def test_applying_a_blocked_plan_writes_nothing(self):
-        class Recorder(object):
-            def __init__(self):
-                self.writes = []
-
-            def init(self, *a):
-                self.writes.append(a)
-
-            def set(self, *a):
-                self.writes.append(a)
-
-            def delete(self, *a):
-                self.writes.append(a)
-
         client = Recorder()
-        actions = logs.plan(desired(type="tcp_client", ip=None), absent_actual())
-        logs.apply_plan(client, desired(type="tcp_client", ip=None), actions)
+        with uncreatable_type():
+            actions = logs.plan(desired(type="frozen", ip=None), absent_actual())
+            self.assertEqual([a.kind for a in actions], ["blocked_uncreatable"])
+            logs.apply_plan(client, desired(type="frozen", ip=None), actions)
         self.assertEqual(client.writes, [])
 
 
@@ -127,6 +136,44 @@ class TestRequiredAndIgnoredParams(unittest.TestCase):
             logs.validate_writer(desired(properties={"OfflineMaxCacheCount": 5})))
 
 
+class Recorder(object):
+    """A client that records writes and performs none."""
+
+    def __init__(self):
+        self.writes = []
+
+    def init(self, *args):
+        self.writes.append(("init",) + args)
+
+    def set(self, *args):
+        self.writes.append(("set",) + args)
+
+    def delete(self, *args):
+        self.writes.append(("delete",) + args)
+
+
+@contextlib.contextmanager
+def uncreatable_type():
+    """Register a writer type the device will not create, for the duration.
+
+    No real type is uncreatable any more, so the rails that protect
+    unrebuildable objects need one to exist in order to be tested at all.
+    """
+    logs.WRITER_TYPES["frozen"] = logs.WriterType(
+        key="frozen",
+        sap_type="FrozenWriter",
+        creatable=False,
+        init_params=None,
+        endpoint_property="RemoteEndpointUri",
+        endpoint_template=lambda d: ("tcp://%s:1515/" % d["ip"]) if d.get("ip") else None,
+        notes="Synthetic, for tests.",
+    )
+    try:
+        yield
+    finally:
+        del logs.WRITER_TYPES["frozen"]
+
+
 class TestEndpoints(unittest.TestCase):
     def test_listener_endpoint_is_bind_address_not_a_uri(self):
         wt = logs.writer_type("tcp_listener")
@@ -154,11 +201,14 @@ class TestEndpoints(unittest.TestCase):
 
 
 class TestNeverDeleteWhatCannotBeRecreated(unittest.TestCase):
-    """The most important rail added with the new types.
+    """The rail, tested against a synthetic type.
 
-    A TcpClientWriter cannot be created. Replacing one would delete a working
-    writer and then silently fail to rebuild it, so replace is refused for
-    that type even when explicitly requested.
+    It used to be tested against tcp_client, which was believed uncreatable.
+    The device disproved that, so no REAL type triggers this today - but the
+    rail is the reason a purge or a replace cannot destroy something
+    unrebuildable, and it should not go untested just because the one known
+    example turned out to be rebuildable after all. A firmware that refuses a
+    type, or a type added later, lands straight back on it.
     """
 
     def setUp(self):
@@ -166,39 +216,35 @@ class TestNeverDeleteWhatCannotBeRecreated(unittest.TestCase):
             {"Name": "w", "RemoteEndpointUri": "tcp://192.0.2.21:1515/"})
 
     def test_replace_is_refused_for_an_uncreatable_type(self):
-        actions = logs.plan(desired(type="tcp_client", ip="192.0.2.99"), self.actual,
-                            on_immutable_change="replace")
+        with uncreatable_type():
+            actions = logs.plan(desired(type="frozen", ip="192.0.2.99"),
+                                self.actual, on_immutable_change="replace")
         self.assertEqual([a.kind for a in actions], ["blocked_immutable"])
         self.assertIn("cannot be recreated", actions[0].summary)
 
     def test_no_delete_is_emitted(self):
-        class Recorder(object):
-            def __init__(self):
-                self.writes = []
-
-            def init(self, *a):
-                self.writes.append(("init",) + a)
-
-            def set(self, *a):
-                self.writes.append(("set",) + a)
-
-            def delete(self, *a):
-                self.writes.append(("delete",) + a)
-
         client = Recorder()
-        d = desired(type="tcp_client", ip="192.0.2.99")
-        logs.apply_plan(client, d, logs.plan(d, self.actual,
-                                             on_immutable_change="replace"))
+        with uncreatable_type():
+            d = desired(type="frozen", ip="192.0.2.99")
+            logs.apply_plan(client, d, logs.plan(
+                d, self.actual, on_immutable_change="replace"))
         self.assertEqual(client.writes, [])
 
     def test_explicit_absent_is_still_allowed_but_flagged_one_way(self):
         # Deleting deliberately is fine - it is repairing drift by deletion
         # that is refused.
-        actions = logs.plan(desired(type="tcp_client", ip=None, state="absent"),
-                            self.actual)
+        with uncreatable_type():
+            actions = logs.plan(desired(type="frozen", ip=None, state="absent"),
+                                self.actual)
         self.assertEqual([a.kind for a in actions], ["writer_delete"])
         self.assertIn("cannot be recreated", actions[0].summary)
         self.assertTrue(actions[0].destructive)
+
+    def test_a_purge_skips_it_rather_than_deleting_it(self):
+        # A purge is the one place a writer is removed without anyone naming
+        # it, so an unrebuildable one is skipped and reported.
+        with uncreatable_type():
+            self.assertFalse(logs.writer_type("frozen").replaceable)
 
 
 class TestWriterProperties(unittest.TestCase):

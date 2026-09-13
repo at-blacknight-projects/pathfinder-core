@@ -57,6 +57,10 @@ LOG_ROTATOR = "LogRotator#0"
 #: an IP; the API exposes a full URI, and the device builds it from ``ip=``.
 SYSLOG_PORT = 514
 
+#: A TcpClientWriter has no fixed port, but one is mandatory at creation - the
+#: init no-ops without it. This is only a default for callers that omit it.
+TCP_CLIENT_PORT = 1515
+
 
 class WriterType(object):
     """What the module may do with one class of log writer.
@@ -121,21 +125,50 @@ WRITER_TYPES = {
         notes="Syslog is UDP-only with port 514 fixed.",
     ),
 
-    # NOT creatable. Nine parameter vocabularies were tried against real
-    # hardware - ip+port, uri, remoteendpointuri, the object's own property
-    # names, host+port, address, endpoint, url, and ip alone - and every one
-    # was a silent no-op. So an existing TCP writer can be configured and
-    # deleted (which is what retiring the legacy path needs), but not created.
+    # Creatable after all, and the correction matters: this was recorded as
+    # impossible on the strength of nine parameter vocabularies that all
+    # silently no-op'd - ip+port, uri, remoteendpointuri, the object's own
+    # property names, host+port, address, endpoint, url, and ip alone.
+    #
+    # Every one of those was missing `autoReconnect`, which is load-bearing.
+    # Measured with one name per attempt so nothing was confounded by a
+    # delete-then-recreate:
+    #
+    #   name,ip,port                        -> no-op
+    #   name,ip,port (ip quoted)            -> no-op
+    #   name,ip,autoReconnect   (no port)   -> no-op
+    #   name,port,autoReconnect (no ip)     -> no-op
+    #   name,autoReconnect                  -> no-op
+    #   name,ip,port,autoReconnect          -> CREATED, quoted or bare ip
+    #
+    # So all four are required together; any one missing is a silent no-op.
+    # `autoReconnect` is init-only - it is accepted and does not appear as a
+    # property afterwards. The device builds RemoteEndpointUri from ip+port,
+    # exactly as UdpSysLogWriter does from ip.
+    #
+    # ⚠️ `name=` ALONE also creates something, with RemoteEndpointUri pointing
+    # at a stale address and port 0. Same zombie shape as a tcp_listener made
+    # without a port, so required_params refuses it.
+    #
+    # ⚠️ Creating one makes the device attempt the outbound connection
+    # immediately, and reads QUEUE BEHIND THAT - measured at ~30s against an
+    # unreachable endpoint, far past the default read_timeout. A read-back
+    # taken straight afterwards returns empty and looks exactly like a failed
+    # create. See verify().
     "tcp_client": WriterType(
         key="tcp_client",
         sap_type="TcpClientWriter",
-        creatable=False,
-        init_params=None,
+        creatable=True,
+        init_params=lambda d: [("name", d["name"]), ("ip", d["ip"]),
+                               ("port", d.get("port") or TCP_CLIENT_PORT),
+                               ("autoReconnect", True)],
         writable_properties=("GetOnConnect", "OfflineMaxCacheCount"),
         endpoint_property="RemoteEndpointUri",
-        endpoint_template=lambda d: ("tcp://%s:%s/" % (d["ip"], d.get("port") or 1515)) if d.get("ip") else None,
-        notes=("Creation is not supported by the device. Plain text with no "
-               "header, tag or in-band identity - this is the legacy path."),
+        endpoint_template=lambda d: ("tcp://%s:%s/" % (d["ip"], d.get("port") or TCP_CLIENT_PORT)) if d.get("ip") else None,
+        required_params=("ip",),
+        notes=("Plain text with no header, tag or in-band identity, so no "
+               "attribution survives SNAT - prefer udp_syslog for new work. "
+               "Creating one blocks the device's reads while it dials out."),
     ),
 
     # The other TCP option, and the opposite of tcp_client: the device
@@ -1306,9 +1339,22 @@ def find_unmanaged(client, desired_writers):
     named = set((entry.get("type") or DEFAULT_WRITER_TYPE, entry["name"])
                 for entry in desired_writers)
     managed_types = set(key for key, _name in named)
-    return [{"name": name, "type": key, "path": path}
-            for (key, name), path in sorted(list_writers(client).items())
-            if (key, name) not in named and key in managed_types]
+
+    found = []
+    for (key, name), path in sorted(list_writers(client).items()):
+        if (key, name) in named or key not in managed_types:
+            continue
+        entry = {"name": name, "type": key, "path": path}
+        # Record where it pointed. Every type that can be purged can also be
+        # recreated, but only by someone who knows its endpoint - and after a
+        # purge there is nothing left to read it from. One cheap read here is
+        # what makes the removal reversible rather than merely undoable in
+        # principle.
+        wtype = writer_type(key)
+        if wtype.endpoint_property:
+            entry["endpoint"] = client.get(path).get(wtype.endpoint_property, "")
+        found.append(entry)
+    return found
 
 
 def plan_device(client, writers, rotation=None, on_immutable_change="fail",

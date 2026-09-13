@@ -441,18 +441,28 @@ class TestUnmanagedWriters(unittest.TestCase):
                    if a.kind == "writer_delete"]
         self.assertEqual(deleted, ["stale_one"])
 
-    def test_purge_skips_what_cannot_be_recreated(self):
+    def test_a_tcp_client_is_purgeable_now_that_it_can_be_recreated(self):
+        # It used to be skipped, on the belief that a TcpClientWriter could not
+        # be created. The device disproved that, so the rail no longer applies
+        # to this type - it is still tested, against a synthetic one, in
+        # test_writer_types.
         device = self.device()
         plan = logs.plan_device(
             device,
-            [writer("alloy_site1"), writer("keep_me", type="tcp_client", ip=None)],
+            [writer("alloy_site1"), writer("keep_me", type="tcp_client",
+                                           ip="192.0.2.70")],
             unmanaged="purge")
         by_name = dict((u["name"], u) for u in plan.unmanaged)
         self.assertEqual(by_name["stale_one"]["action"], "delete")
-        self.assertEqual(by_name["legacy"]["action"], "skipped")
-        self.assertIn("one-way", by_name["legacy"]["reason"])
-        self.assertNotIn("Logs#0.TcpClientWriter#legacy",
-                         [a.to_dict().get("path") for a in plan.actions])
+        self.assertEqual(by_name["legacy"]["action"], "delete")
+
+    def test_the_endpoint_is_recorded_before_anything_is_removed(self):
+        # A purge is reversible only for someone who knows where the writer
+        # pointed, and afterwards there is nothing left to read it from.
+        device = self.device()
+        plan = logs.plan_device(device, [writer("alloy_site1")],
+                                unmanaged="report")
+        self.assertEqual(plan.unmanaged[0]["endpoint"], URI)
 
     def test_purge_deletes_run_after_the_creates_verify(self):
         device = self.device()
