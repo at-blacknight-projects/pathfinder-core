@@ -129,3 +129,40 @@ class TestRenderValue(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSchemaWithEscapedDescriptions(unittest.TestCase):
+    """rfs embeds a quoted description inside an already-quoted block.
+
+    Treating the inner escaped quote as a quote toggle turned quoting off
+    halfway through the value, so every comma in the description split as
+    though it were top level - inventing property names and silently dropping
+    the access type of whatever followed. Access type is what decides whether a
+    property is configuration or refused as runtime state, so losing it matters.
+    """
+
+    REPLY = ('sfr Devices#0 DeviceCount=[ReadWrite=RO,SyntaxType=NUM], '
+             'Ready="[ReadWrite=RO,SyntaxType=BOL,IsStable=True,'
+             'UiDescription=\\"Becomes True when System starts.\\"]", '
+             'SubmitSapMessage=[ReadWrite=WO,SyntaxType=TXT], '
+             'SystemStartupState=[ReadWrite=RO,SyntaxType=TXT]')
+
+    def test_every_property_survives(self):
+        schema = sapv2.parse_schema(self.REPLY)
+        self.assertEqual(sorted(schema),
+                         ["DeviceCount", "Ready", "SubmitSapMessage",
+                          "SystemStartupState"])
+
+    def test_no_property_name_is_invented(self):
+        for name in sapv2.parse_schema(self.REPLY):
+            self.assertNotIn(",", name)
+            self.assertNotIn('"', name)
+
+    def test_the_property_after_a_description_keeps_its_access_type(self):
+        schema = sapv2.parse_schema(self.REPLY)
+        self.assertEqual(schema["SubmitSapMessage"]["ReadWrite"], "WO")
+        self.assertEqual(schema["SystemStartupState"]["ReadWrite"], "RO")
+
+    def test_a_quoted_value_containing_a_comma_still_splits_correctly(self):
+        parsed = sapv2.parse_indi('indi X#0 A="one, two", B="three"')
+        self.assertEqual(parsed["X#0"], {"A": "one, two", "B": "three"})

@@ -172,3 +172,60 @@ class TestScriptPathsMustBeRead(unittest.TestCase):
         # The NOP line's object is excluded: its name is not a property.
         self.assertNotIn(
             "Devices#0.EndpointDiscoverers#0.LivewireEndpointDiscovery", paths)
+
+
+class TestUnverifiableLines(unittest.TestCase):
+    """A property SapV2 cannot see is not proof the line does nothing.
+
+    These were reported as "dead lines that do nothing every boot" until the
+    device's own FACTORY DEFAULT script turned out to contain both of them.
+    The startup file has its own loader - Devices#0.StartupFileProcessed exists
+    because of it - which understands directives the object model never
+    surfaces as properties.
+    """
+
+    SCRIPT = [
+        "SET Devices#0 LwcpSs=True",
+        "SET Devices#0 QorMonitor=True",
+        "SET Devices#0 Invented=True",
+        "SET Logs#0 SkipCleanLogs=False",
+    ]
+    #: Both ship with the device; "Invented" does not.
+    FACTORY = ["SET Devices#0 LwcpSs=True", "SET Devices#0 QorMonitor=True"]
+    LIVE = {"Devices#0": {"FpStatPollRate": "1000"},
+            "Logs#0": {"SkipCleanLogs": "False"}}
+
+    def _run(self):
+        commands, _unparsed = startup.parse_script(self.SCRIPT)
+        return startup.boot_vs_live(commands, self.LIVE, self.FACTORY)
+
+    def test_a_vendor_shipped_directive_is_flagged_as_such(self):
+        _drift, unverifiable = self._run()
+        shipped = dict((u["property"], u) for u in unverifiable)
+        self.assertTrue(shipped["LwcpSs"]["in_factory_defaults"])
+        self.assertTrue(shipped["QorMonitor"]["in_factory_defaults"])
+        self.assertIn("leave it alone", shipped["LwcpSs"]["reason"])
+
+    def test_one_the_vendor_does_not_ship_is_distinguished(self):
+        _drift, unverifiable = self._run()
+        invented = [u for u in unverifiable if u["property"] == "Invented"][0]
+        self.assertFalse(invented["in_factory_defaults"])
+        self.assertIn("worth checking", invented["reason"].lower()
+                      .replace("check it before", "worth checking"))
+
+    def test_it_no_longer_claims_the_line_does_nothing(self):
+        _drift, unverifiable = self._run()
+        for entry in unverifiable:
+            self.assertNotIn("does nothing", entry["reason"])
+
+    def test_a_readable_property_is_not_listed(self):
+        _drift, unverifiable = self._run()
+        self.assertNotIn("SkipCleanLogs",
+                         [u["property"] for u in unverifiable])
+
+    def test_it_works_without_the_factory_list(self):
+        # compare_live can run before the factory script is known.
+        commands, _unparsed = startup.parse_script(self.SCRIPT)
+        _drift, unverifiable = startup.boot_vs_live(commands, self.LIVE)
+        self.assertEqual(len(unverifiable), 3)
+        self.assertFalse(any(u["in_factory_defaults"] for u in unverifiable))

@@ -245,13 +245,32 @@ def _split_top_level(text, separator=","):
 
     ``indi`` payloads look like ``A="x", B="y, z", C=[k=v,k2=v2]`` so neither a
     naive ``split(",")`` nor a single regex is safe.
+
+    Backslash escapes have to be honoured, not just quotes. An ``rfs`` reply
+    embeds a quoted description INSIDE an already-quoted metadata block::
+
+        Ready="[ReadWrite=RO,...,UiDescription=\\"Becomes True when...\\"]"
+
+    Treating that inner ``\\"`` as a quote toggle turns quoting off halfway
+    through the value, after which every comma in the description splits as
+    though it were top level. That produced schema entries with names like
+    ``Complete(Complete)\\",IsSimpleUi`` and silently dropped the access type of
+    whatever property followed - which matters, because the access type is what
+    decides whether a property is configuration or refused as runtime state.
     """
     out = []
     buf = []
     depth = 0
     in_quotes = False
+    escaped = False
     for ch in text:
-        if ch == '"':
+        if escaped:
+            buf.append(ch)
+            escaped = False
+        elif ch == "\\":
+            buf.append(ch)
+            escaped = True
+        elif ch == '"':
             in_quotes = not in_quotes
             buf.append(ch)
         elif not in_quotes and ch == "[":

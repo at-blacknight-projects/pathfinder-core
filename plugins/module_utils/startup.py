@@ -134,24 +134,49 @@ def index_by_target(commands):
     return index
 
 
-def boot_vs_live(commands, live):
+def boot_vs_live(commands, live, factory=None):
     """Where the script's value differs from what the device currently holds.
 
-    `live` is ``{path: {property: value}}``. Returns dicts describing each
-    difference, plus the script lines targeting a property the device does not
-    expose at all - which is a line that silently does nothing on every boot,
-    and is otherwise invisible.
+    `live` is ``{path: {property: value}}``. Returns the differences, plus the
+    lines whose target property SapV2 does not report.
+
+    That second list used to be called "dead lines", on the reasoning that a
+    property the API does not expose cannot be set. That inference was wrong.
+    The startup file is processed by its own loader - ``Devices#0`` has a
+    ``StartupFileProcessed`` property precisely because of it - and that loader
+    evidently understands directives the SapV2 object model does not surface as
+    properties. Measured: ``SET Devices#0 LwcpSs=True`` and
+    ``SET Devices#0 QorMonitor=True`` are absent from ``get`` AND from ``rfs``,
+    yet both ship in the device's own FACTORY DEFAULT script.
+
+    So these are reported as *unverifiable from here*, not as broken. `factory`
+    - the factory default script, which the web admin page carries alongside
+    the live one - lets each entry say whether the vendor ships that line,
+    which is the strongest signal available on which side of the line it falls.
     """
-    drift, absent = [], []
+    factory_lines = set((factory or []))
+    drift, unverifiable = [], []
     for (path, name), command in sorted(index_by_target(commands).items()):
         properties = live.get(path)
         if properties is None:
             continue
         if name not in properties:
-            absent.append({
+            shipped = command.raw.strip() in factory_lines
+            unverifiable.append({
                 "path": path, "property": name, "script_value": command.value,
-                "reason": "the device does not expose this property, so this "
-                          "line does nothing every boot",
+                "in_factory_defaults": shipped,
+                "reason": (
+                    "SapV2 does not report this property, so its effect cannot "
+                    "be confirmed from here. " + (
+                        "It is in the device's FACTORY DEFAULT script, so it is "
+                        "a vendor-shipped directive the startup loader "
+                        "understands even though the API does not expose it - "
+                        "leave it alone."
+                        if shipped else
+                        "It is not in the factory defaults either, so it may be "
+                        "a typo, a directive for a different firmware, or one "
+                        "only the startup loader understands. Check it before "
+                        "assuming either way.")),
             })
             continue
         current = str(properties[name]).strip()
@@ -160,7 +185,7 @@ def boot_vs_live(commands, live):
                 "path": path, "property": name,
                 "live": current, "script": command.value,
             })
-    return drift, absent
+    return drift, unverifiable
 
 
 def conflicts(intended_writes, commands):

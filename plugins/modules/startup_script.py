@@ -111,7 +111,7 @@ EXAMPLES = r"""
 
 - name: Lines that do nothing at all, every boot
   ansible.builtin.debug:
-    var: startup.dead_lines
+    var: startup.unverifiable
 
 - name: Keep smaller log files, durably
   at_blacknight.pathfinder_core.startup_script:
@@ -160,11 +160,22 @@ live_drift:
   returned: always
   type: list
   elements: dict
-dead_lines:
+unverifiable:
   description:
-    - Script lines targeting a property the device does not expose. These do
-      nothing on every boot and are otherwise invisible. Only populated when
-      I(compare_live) is set.
+    - >-
+      Script lines whose target property SapV2 does not report, so their effect
+      cannot be confirmed from here. Only populated when I(compare_live) is set.
+    - >-
+      B(These are not necessarily broken.) The startup file is processed by its
+      own loader - C(Devices#0.StartupFileProcessed) exists because of it - and
+      that loader understands directives the object model does not expose.
+      Measured: C(SET Devices#0 LwcpSs=True) and C(SET Devices#0 QorMonitor=True)
+      appear in neither C(get) nor C(rfs), yet ship in the device's own factory
+      default script.
+    - >-
+      Each entry carries C(in_factory_defaults). True means the vendor ships
+      that line and it should be left alone; false means it is worth checking,
+      because it could equally be a typo or a directive for another firmware.
   returned: always
   type: list
   elements: dict
@@ -216,7 +227,7 @@ def main():
     )
 
     result = {"changed": False, "script": [], "factory_defaults": [],
-              "differs_from_factory": {}, "live_drift": [], "dead_lines": [],
+              "differs_from_factory": {}, "live_drift": [], "unverifiable": [],
               "unparsed": []}
 
     try:
@@ -246,9 +257,10 @@ def main():
                 live = {}
                 for path in sorted({c.path for c in commands if c.is_property}):
                     live[path] = sap.get(path)
-                drift, dead = startup_script.boot_vs_live(commands, live)
+                drift, unverifiable = startup_script.boot_vs_live(
+                    commands, live, factory)
                 result["live_drift"] = drift
-                result["dead_lines"] = dead
+                result["unverifiable"] = unverifiable
             finally:
                 sap.close()
 
