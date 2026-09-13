@@ -1,0 +1,1 @@
+indi System#0 Ready=True, LastStarted="2026-01-01T00:00:00.000+00:00", SapId=0, FriendlyName="System#0", SapObjectType=System, SubVersion="2026-01-01T00:00:00.000+00:00"

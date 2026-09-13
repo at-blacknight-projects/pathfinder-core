@@ -1,0 +1,17 @@
+indi Clustering#0
+indi DeviceEmulators#0
+indi Devices#0
+indi LegacyPanels#0
+indi LogicFlows#0
+indi Logs#0
+indi MemorySlots#0
+indi Meters#0
+indi PropertyGroups#0
+indi Requests#0
+indi Routers#0
+indi Scenes#0
+indi System#0
+indi TimeEvents#0
+indi UpdateModerators#0
+indi UserPanels#0
+indi Users#0

@@ -799,7 +799,7 @@ class SapV2Client(object):
 
             init Users#0.SapUser Username=Admin
             init Routers#0.AxiaAudioRouter id=1
-            init MemorySlots#0.LatchingMemorySlot slotName=Cyclone_Mode_Latch
+            init MemorySlots#0.LatchingMemorySlot slotName=Standby_Mode_Latch
 
         This is the authoritative way to discover a type's init parameter
         names. They are genuinely inconsistent between types - ``Username``,

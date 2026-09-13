@@ -1,0 +1,1 @@
+error Logs#0 $OP=constructor $STATUS="Unsupported Operation."

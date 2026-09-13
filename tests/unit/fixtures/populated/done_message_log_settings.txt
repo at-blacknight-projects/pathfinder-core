@@ -1,0 +1,1 @@
+indi Logs#0.UdpSysLogWriter#alloy_site1.MessageLogSettings#0 Lwrp=Both, Lwcp=Both, SapV2Internal=Both, SapV2External=Both, AuditGet=False, AuditSet=True, SkipWebClientSapMessages=False, LoginFailures=True, LoginSuccesses=True, AccessViolations=True, FriendlyName="MessageLogSettings#0" $DONE

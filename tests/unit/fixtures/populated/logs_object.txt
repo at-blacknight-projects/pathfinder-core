@@ -1,0 +1,1 @@
+indi Logs#0 Ready=True, LoadStoredLogWriters=True, DeleteLogFile="", ClearLogFile="", LastStarted="2026-01-01T00:00:00.000+00:00", Ping=Pong, SkipCleanLogs=False, CheckRotationAfterMaxWrites=250, FriendlyName=Logs, SapObjectType=Logs, SubVersion="2026-01-01T00:00:00.000+00:00"

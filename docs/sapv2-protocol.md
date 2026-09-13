@@ -147,8 +147,8 @@ init Users#0.SapUser Username=Admin
 init Users#0.SapUser#Admin.UserSecurity Name=Admin
 init Routers#0.AxiaAudioRouter id=1
 init Routers#0.SapPropertyRouter id=10
-init MemorySlots#0.LatchingMemorySlot slotName=Cyclone_Mode_Latch
-init LogicFlows#0.LogicFlowFolder FolderName=COPIES
+init MemorySlots#0.LatchingMemorySlot slotName=Standby_Mode_Latch
+init LogicFlows#0.LogicFlowFolder FolderName=ARCHIVE
 ```
 
 Issuing `constructor <path>` as a verb instead returns
