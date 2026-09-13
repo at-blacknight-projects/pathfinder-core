@@ -46,7 +46,7 @@
         customname: smoke-gain
 
   tasks:
-    - name: pfc_host must be given explicitly
+    - name: Require pfc_host to be given explicitly
       ansible.builtin.assert:
         that: pfc_host is defined and pfc_host | length > 0
         fail_msg: >-
@@ -118,7 +118,8 @@
           start. None of them will be touched.
 
     # ── The tests ────────────────────────────────────────────────────────────
-    - block:
+    - name: Exercise the device, cleaning up whatever happens
+      block:
         - name: 1. Create a udp_syslog writer with subscriptions and settings
           at_blacknight.pathfinder_core.logs:
             <<: *common

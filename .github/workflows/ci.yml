@@ -53,6 +53,38 @@ jobs:
         working-directory: ansible_collections/at_blacknight/pathfinder_core
         run: ansible-test sanity --local --python 3.12
 
+  lint:
+    name: ansible-lint
+    runs-on: ubuntu-latest
+    steps:
+      # Same layout reason as sanity: ansible-lint resolves the collection by
+      # its path, and linting the integration playbook means resolving the FQCNs
+      # it calls.
+      - uses: actions/checkout@v4
+        with:
+          path: ansible_collections/at_blacknight/pathfinder_core
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Pinned. ansible-lint adds rules between minor versions, so an unpinned
+      # install turns someone else's release into a red build on an unrelated
+      # commit.
+      - name: Install ansible-lint
+        run: pip install 'ansible-lint==26.8.0'
+
+      # Complements sanity rather than repeating it: sanity checks the module
+      # contract (documentation matching argument_spec, line endings, imports),
+      # lint checks how the YAML is written - unnamed tasks, non-FQCN module
+      # references, a requires_ansible claiming a version nobody tests.
+      #
+      # --offline because the runner has no business fetching galaxy metadata to
+      # decide whether this repository is well formed.
+      - name: Run ansible-lint
+        working-directory: ansible_collections/at_blacknight/pathfinder_core
+        run: ansible-lint --offline
+
   build:
     name: Collection builds
     runs-on: ubuntu-latest
@@ -81,7 +113,7 @@ jobs:
   # commit. Passing `git-commit-files` a plain path here avoids that entirely.
   version:
     name: Detect version
-    needs: [units, sanity, build]
+    needs: [units, sanity, lint, build]
     if: github.event_name == 'push'
     uses: at-blacknight/atb-ci/.github/workflows/stage-version-detect.yml@v0.1.1
     with:
