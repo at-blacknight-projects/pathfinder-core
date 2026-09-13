@@ -321,3 +321,59 @@ class TestErrorAndConstructor(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestEchoedModifiers(unittest.TestCase):
+    """The device echoes the REQUEST'S modifiers onto every reply line.
+
+    First understood as a $DONE quirk and fixed for $DONE alone. A deep read
+    echoes $MAX_DEPTH the same way, on both firmwares captured here - so the
+    corpus contained the evidence from the day it was recorded and the tests
+    simply did not look. Which property carries the echo depends on the order
+    the device emits properties in, so this was invisible while it landed on
+    SubVersion and latent for the day it lands on Subscription.
+    """
+
+    DEEP = ("logs_deep", "done_logs_deep")
+
+    def test_no_value_keeps_an_echoed_modifier(self):
+        for device in DEVICES:
+            for name in self.DEEP:
+                for path, props in sapv2.parse_indi(reply(device, name)).items():
+                    for prop, value in props.items():
+                        if prop == "Subscription":
+                            continue  # genuinely ends "... $MAX_DEPTH=-1"
+                        self.assertNotIn("$MAX_DEPTH", str(value),
+                                         "%s %s.%s" % (device, path, prop))
+                        self.assertNotIn("$DONE", str(value),
+                                         "%s %s.%s" % (device, path, prop))
+
+    def test_no_value_keeps_a_stray_quote(self):
+        # The tell for a folded modifier: the real value's closing quote ends up
+        # inside the parsed string, as '"MessageLogSettings#0" $MAX_DEPTH=-1'.
+        for device in DEVICES:
+            for name in self.DEEP:
+                for path, props in sapv2.parse_indi(reply(device, name)).items():
+                    for prop, value in props.items():
+                        self.assertNotIn('"', str(value),
+                                         "%s %s.%s = %r" % (device, path, prop, value))
+
+    def test_a_subscription_expression_is_not_truncated(self):
+        # The other half: the modifier INSIDE a quoted value must survive,
+        # because that is the expression the device actually stores.
+        parsed = sapv2.parse_indi(reply("populated", "done_logs_deep"))
+        expressions = [p["Subscription"] for p in parsed.values()
+                       if "Subscription" in p]
+        self.assertTrue(expressions)
+        self.assertTrue(any(e.endswith("$MAX_DEPTH=-1") for e in expressions))
+
+    def test_stripping_is_idempotent_and_harmless(self):
+        self.assertEqual(sapv2.strip_modifiers("indi X#0 A=1"), "indi X#0 A=1")
+        self.assertEqual(sapv2.strip_modifiers("indi X#0 A=1 $DONE"), "indi X#0 A=1")
+        self.assertEqual(
+            sapv2.strip_modifiers('indi X#0 A="v" $MAX_DEPTH=-1 $DONE'),
+            'indi X#0 A="v"')
+        # A quoted value ending in a modifier is left intact.
+        self.assertEqual(
+            sapv2.strip_modifiers('indi X#0 A="sub Y $MAX_DEPTH=-1"'),
+            'indi X#0 A="sub Y $MAX_DEPTH=-1"')

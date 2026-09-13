@@ -1421,6 +1421,12 @@ def plan_device(client, writers, rotation=None, on_immutable_change="fail",
                 planned.append(WriterPlan(desired, actual,
                                           plan(desired, actual)))
 
-    rotation_actual = read_rotation(client) if rotation else {}
+    # Always read, even when no rotation was requested. The module documents
+    # `rotation` as returned always, and it was not - it came back empty unless
+    # you asked for changes, so a drift report had to request a change in order
+    # to observe the current state. Three reads, about a tenth of a second each
+    # now that reads terminate on $DONE rather than waiting out an idle gap;
+    # when a read cost 1.5s this trade would have gone the other way.
+    rotation_actual = read_rotation(client)
     return DevicePlan(planned, rotation, rotation_actual,
                       plan_rotation(rotation, rotation_actual), unmanaged=found)

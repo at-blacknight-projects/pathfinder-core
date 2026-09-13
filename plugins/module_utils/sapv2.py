@@ -149,17 +149,36 @@ _BARE_VALUE_RE = re.compile(r"^[A-Za-z0-9_.:-]+$")
 #: verification remains the only way to know a write took.
 DONE_MODIFIER = "$DONE"
 
-#: The terminator is appended after the last property SPACE-separated, not
-#: comma-separated, so a naive parse folds it into that property's value:
-#: ``FriendlyName="MessageLogSettings#0" $DONE``. On a subscription that would
-#: make ``Subscription`` compare unequal to the desired expression on every
-#: run, forever. Strip it before parsing.
-_DONE_SUFFIX_RE = re.compile(r"\s*\$DONE\s*$", re.IGNORECASE)
+#: The device ECHOES THE REQUEST'S MODIFIERS at the end of every reply line,
+#: space-separated rather than comma-separated, so a naive parse folds them into
+#: the last property's value::
+#:
+#:     FriendlyName="MessageLogSettings#0" $DONE
+#:     SubVersion="0001-01-01T00:00:00.000+00:00" $MAX_DEPTH=-1
+#:
+#: This is not specific to ``$DONE``, which is how it was first understood and
+#: fixed. A deep read echoes ``$MAX_DEPTH`` the same way, on both firmwares
+#: measured, and which property ends up carrying it depends purely on the order
+#: the device happens to emit properties in. That made the bug invisible while
+#: the trailing property was ``SubVersion`` and latent for the day it is
+#: ``Subscription`` or ``RemoteEndpointUri`` - either of which compares unequal
+#: to the desired value forever, so the module rewrites it on every run and
+#: never converges.
+#:
+#: A modifier inside a QUOTED value is left alone: a subscription expression
+#: genuinely ends ``... $MAX_DEPTH=-1``, and the closing quote is what tells the
+#: two apart.
+_TRAILING_MODIFIERS_RE = re.compile(
+    r"(?:\s+\$[A-Za-z_][A-Za-z0-9_]*(?:=[^\s\",]*)?)+\s*$")
 
 
-def strip_done(line):
-    """Remove a trailing ``$DONE`` terminator from one reply line."""
-    return _DONE_SUFFIX_RE.sub("", line)
+def strip_modifiers(line):
+    """Remove the modifiers the device echoed back on one reply line."""
+    return _TRAILING_MODIFIERS_RE.sub("", line)
+
+
+#: Retained under its old name: the terminator is the modifier callers ask about.
+strip_done = strip_modifiers
 
 
 def has_done(text):
@@ -368,10 +387,10 @@ def parse_indi(text):
     if not text:
         return result
     for line in text.splitlines():
-        # Strip the terminator FIRST. It sits after the last property with only
-        # a space before it, so leaving it in appends " $DONE" to that
-        # property's value.
-        line = strip_done(line.strip()).strip()
+        # Strip echoed modifiers FIRST. They sit after the last property with
+        # only a space before them, so leaving them in appends " $DONE" or
+        # " $MAX_DEPTH=-1" to that property's value.
+        line = strip_modifiers(line.strip()).strip()
         if not line or _NONE_RE.match(line):
             continue
         match = _REPLY_RE.match(line)

@@ -526,7 +526,12 @@ unmanaged:
   type: list
   elements: dict
 rotation:
-  description: Rotation settings as read from the device.
+  description:
+    - Rotation settings as read from the device, keyed by object path.
+    - >-
+      Read on every run, whether or not I(rotation) was supplied, so a drift
+      report can observe the current values without having to request a change
+      in order to see them.
   returned: always
   type: dict
 will_revert_at_reboot:
