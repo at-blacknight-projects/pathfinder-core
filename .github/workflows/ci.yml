@@ -81,8 +81,15 @@ jobs:
       #
       # --offline because the runner has no business fetching galaxy metadata to
       # decide whether this repository is well formed.
+      # ANSIBLE_COLLECTIONS_PATH points at the workspace so the FQCNs in the
+      # integration playbook resolve to THIS checkout. Without it lint resolves
+      # them against whatever happens to be installed - which on a developer's
+      # machine is usually a previously-installed copy, so it passes locally and
+      # fails here. It did exactly that.
       - name: Run ansible-lint
         working-directory: ansible_collections/at_blacknight/pathfinder_core
+        env:
+          ANSIBLE_COLLECTIONS_PATH: ${{ github.workspace }}
         run: ansible-lint --offline
 
   build:
