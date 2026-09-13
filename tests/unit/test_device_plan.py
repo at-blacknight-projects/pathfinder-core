@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Tests for reconciling a whole device: several writers in one session.
 
-The safety property under test is the phase boundary. ``pfc_logs`` takes the
+The safety property under test is the phase boundary. ``logs`` takes the
 device's whole writer list so that standing up a replacement and retiring the
 one it replaces is a single intent, and that is only safe if the delete happens
 strictly after the create has been read back. On this protocol a failed create

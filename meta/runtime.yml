@@ -6,8 +6,8 @@ requires_ansible: ">=2.14.0"
 
 action_groups:
   pathfinder_core:
-    - pfc_logs
-    - pfc_startup_script
-    - pfc_users
-    - pfc_access
-    - pfc_devices
+    - logs
+    - startup_script
+    - users
+    - access
+    - devices

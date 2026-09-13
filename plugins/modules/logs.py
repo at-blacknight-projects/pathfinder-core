@@ -10,7 +10,7 @@ __metaclass__ = type
 
 DOCUMENTATION = r"""
 ---
-module: pfc_logs
+module: logs
 short_description: Manage the Logs subtree of a Telos/Axia PathfinderCore PRO
 version_added: "0.1.0"
 description:
@@ -278,7 +278,7 @@ options:
         C(minutes_between_search), C(skip_clean_logs) and
         C(check_rotation_after_max_writes).
       - These live under C(Logs#0), which is why they are here rather than in
-        C(pfc_startup_script) - each reconciler owns a subtree, and two modules
+        C(startup_script) - each reconciler owns a subtree, and two modules
         writing the same properties would conflict.
       - Device-scoped rather than per-writer, which is why it sits beside
         I(writers) rather than inside an entry. Two tasks asking for different
@@ -290,7 +290,7 @@ options:
   startup_script:
     description:
       - The device's Advanced options script, as raw command lines. Optional and
-        purely advisory here; C(pfc_startup_script) is the module that manages
+        purely advisory here; C(startup_script) is the module that manages
         it.
       - The script replays at boot and is NOT reachable over SapV2, so a value
         set here can be reverted at the next restart. Supplying the script lets
@@ -357,7 +357,7 @@ author:
 
 EXAMPLES = r"""
 - name: Report drift without changing anything
-  at_blacknight.pathfinder_core.pfc_logs:
+  at_blacknight.pathfinder_core.logs:
     host: "{{ inventory_hostname }}"
     username: "{{ pfc_username }}"
     password: "{{ pfc_password }}"
@@ -369,7 +369,7 @@ EXAMPLES = r"""
   register: drift
 
 - name: Create an inert writer, safe on production
-  at_blacknight.pathfinder_core.pfc_logs:
+  at_blacknight.pathfinder_core.logs:
     host: "{{ inventory_hostname }}"
     username: "{{ pfc_username }}"
     password: "{{ pfc_password }}"
@@ -380,7 +380,7 @@ EXAMPLES = r"""
   # exists but emits nothing until a later run adds them.
 
 - name: Cut over in one task - the delete runs only if the create verified
-  at_blacknight.pathfinder_core.pfc_logs:
+  at_blacknight.pathfinder_core.logs:
     host: "{{ inventory_hostname }}"
     username: "{{ pfc_username }}"
     password: "{{ pfc_password }}"
@@ -398,7 +398,7 @@ EXAMPLES = r"""
   # entry ignores them: nothing is configured on a writer being deleted.
 
 - name: Two writers with deliberately different subscription sets
-  at_blacknight.pathfinder_core.pfc_logs:
+  at_blacknight.pathfinder_core.logs:
     host: pfc-002.example.net
     username: "{{ lookup('env', 'PFC_USER') }}"
     password: "{{ lookup('env', 'PFC_PASS') }}"
@@ -419,7 +419,7 @@ EXAMPLES = r"""
       LoginFailures: true
 
 - name: Set log rotation, warned about what the startup script will undo
-  at_blacknight.pathfinder_core.pfc_logs:
+  at_blacknight.pathfinder_core.logs:
     host: "{{ inventory_hostname }}"
     username: "{{ pfc_username }}"
     password: "{{ pfc_password }}"

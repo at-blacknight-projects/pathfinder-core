@@ -10,7 +10,7 @@ __metaclass__ = type
 
 DOCUMENTATION = r"""
 ---
-module: pfc_startup_script
+module: startup_script
 short_description: Manage a PathfinderCore's Advanced options startup script
 version_added: "0.2.0"
 description:
@@ -89,14 +89,14 @@ notes:
   - "Changes take effect at the next restart, not immediately. To change
     behaviour now as well, set the corresponding live value too - for the
     Logs#0 rotation settings that is
-    M(at_blacknight.pathfinder_core.pfc_logs) and its C(rotation) parameter."
+    M(at_blacknight.pathfinder_core.logs) and its C(rotation) parameter."
 author:
   - Adam Butler (@at-blacknight)
 """
 
 EXAMPLES = r"""
 - name: Report the script, and what the device is actually running
-  at_blacknight.pathfinder_core.pfc_startup_script:
+  at_blacknight.pathfinder_core.startup_script:
     host: "{{ inventory_hostname }}"
     port: 8080
     scheme: http
@@ -114,21 +114,21 @@ EXAMPLES = r"""
     var: startup.dead_lines
 
 - name: Keep smaller log files, durably
-  at_blacknight.pathfinder_core.pfc_startup_script:
+  at_blacknight.pathfinder_core.startup_script:
     host: "{{ inventory_hostname }}"
     port: 8080
     scheme: http
     username: "{{ pfc_username }}"
     password: "{{ pfc_password }}"
     # The COMPLETE script - anything omitted is removed from the device.
-    lines: "{{ pfc_startup_script }}"
+    lines: "{{ startup_script }}"
 
 - name: Drift check across the estate, writing nothing
-  at_blacknight.pathfinder_core.pfc_startup_script:
+  at_blacknight.pathfinder_core.startup_script:
     host: "{{ inventory_hostname }}"
     username: "{{ pfc_username }}"
     password: "{{ pfc_password }}"
-    lines: "{{ pfc_startup_script }}"
+    lines: "{{ startup_script }}"
   check_mode: true
 """
 

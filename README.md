@@ -25,11 +25,11 @@ key, its own immutability rules and its own verification scope.
 
 | Module | Subtree | Status |
 |---|---|---|
-| `pfc_logs` | `Logs#0` | **Implemented.** Writers, subscriptions, MessageLogSettings |
-| `pfc_survey` | any | **Implemented.** Read-only schema introspection |
-| `pfc_users` | `Users#0` | Stub — schema measured, design unblocked |
-| `pfc_access` | `System#0.Access#0` | Stub — and it will be a *reporter*, see below |
-| `pfc_devices` | `Devices#0` | Stub |
+| `logs` | `Logs#0` | **Implemented.** Writers, subscriptions, MessageLogSettings |
+| `survey` | any | **Implemented.** Read-only schema introspection |
+| `users` | `Users#0` | Stub — schema measured, design unblocked |
+| `access` | `System#0.Access#0` | Stub — and it will be a *reporter*, see below |
+| `devices` | `Devices#0` | Stub |
 
 Logs was implemented first deliberately: the worst case for getting it wrong is
 losing logs, not losing air.
@@ -86,7 +86,7 @@ state did not take. A reported `changed=true` always means verified.
   connection: local          # devices are not Ansible hosts
   tasks:
     - name: Drift report (writes nothing)
-      at_blacknight.pathfinder_core.pfc_logs:
+      at_blacknight.pathfinder_core.logs:
         host: "{{ inventory_hostname }}"
         username: "{{ lookup('env', 'PFC_USER') }}"
         password: "{{ lookup('env', 'PFC_PASS') }}"
@@ -103,13 +103,13 @@ them.
 
 ## The device's writers are reconciled together
 
-`pfc_logs` takes the whole `writers` list rather than one writer per task. Two
+`logs` takes the whole `writers` list rather than one writer per task. Two
 of the reasons are ordinary — one login instead of one per writer, and one plan
 and one diff for the device — but the third is the one that matters:
 
 ```yaml
     - name: Cut over to the new receiver
-      at_blacknight.pathfinder_core.pfc_logs:
+      at_blacknight.pathfinder_core.logs:
         host: "{{ inventory_hostname }}"
         writers:
           - name: alloy_site1          # the replacement
@@ -188,7 +188,7 @@ case-insensitively at the start of any line, so a wrapped sentence beginning
 
 ## Status
 
-Version 0.1.0. `pfc_logs` has been exercised end to end against a Core PRO:
+Version 0.1.0. `logs` has been exercised end to end against a Core PRO:
 check-mode planning, create, read-back verification, idempotent re-run,
 refusal of an immutable endpoint change, detection of a silently-ignored
 value, read-only-field replacement, and delete.

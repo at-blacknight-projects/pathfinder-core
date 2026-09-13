@@ -10,13 +10,13 @@ __metaclass__ = type
 
 DOCUMENTATION = r"""
 ---
-module: pfc_access
+module: access
 short_description: Manage System#0.Access#0 security config (NOT IMPLEMENTED)
 version_added: "0.1.0"
 description:
   - B(This module is a stub and always fails.) It exists to hold the design
     constraints already measured for C(System#0.Access#0).
-  - Implemented alongside C(pfc_users) - together they are the declarative,
+  - Implemented alongside C(users) - together they are the declarative,
     high-value half of the hardening work.
 options:
   host:
@@ -38,7 +38,7 @@ notes:
   - "The writable access-control surface is elsewhere:
     C(Users#0.SapUser#<name>.UserSecurity) exposes C(IsAdmin),
     C(SecurityPaths), C(MenuItems), C(CanChangeLocks) and C(LocksDoNotApply)
-    as discrete RW properties. Enforcement belongs in C(pfc_users)."
+    as discrete RW properties. Enforcement belongs in C(users)."
   - "C(SecurityJson) arrives wrapped in C(%BeginEncap%) markers, which must be
     stripped before parsing. Note the device reports its C(SyntaxType) as
     C(NUM) despite the content being JSON text, so do not trust the declared
@@ -49,7 +49,7 @@ notes:
 """
 
 EXAMPLES = r"""
-# Not implemented. See pfc_logs for the reconciler pattern this will follow.
+# Not implemented. See logs for the reconciler pattern this will follow.
 """
 
 RETURN = r"""
@@ -68,12 +68,12 @@ def main():
         supports_check_mode=True,
     )
     module.fail_json(
-        msg="pfc_access is not implemented, and will not be a reconciler. "
+        msg="access is not implemented, and will not be a reconciler. "
             "System#0.Access#0.SecurityJson is ReadWrite=RO on measured "
             "firmware, so this subtree cannot be written over SapV2 at all - "
             "the boundary registry classifies it read_only. A read-only "
             "reporter for drift and audit is still worth building. "
-            "Enforcement of access control belongs in pfc_users, against the "
+            "Enforcement of access control belongs in users, against the "
             "UserSecurity child properties, which are RW.")
 
 

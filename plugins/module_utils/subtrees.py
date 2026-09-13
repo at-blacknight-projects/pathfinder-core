@@ -120,7 +120,7 @@ SUBTREES = [
             # policy is RotateRule#0, which IS managed.
             "LogSize", "LastChanged", "RootFileName",
         ],
-        implemented_by="pfc_logs",
+        implemented_by="logs",
         purge_safe=True,
         verify_scope="object",
     ),
