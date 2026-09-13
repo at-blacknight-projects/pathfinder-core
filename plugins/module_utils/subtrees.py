@@ -27,6 +27,16 @@ runtime properties.
 **Default deny.** An unlisted path is refused, not allowed. Adding a subtree is
 a deliberate act that requires writing down why it is safe, which is exactly the
 review moment that a generic "PFC resource" module would skip.
+
+An earlier version carried a per-property allow-list so that service settings
+on the ROOT of a restricted subtree - ``LogicFlows#0.BufferInternalMessages``
+and the like - could be written despite the subtree itself being refused. That
+existed only to support a module that reconciled those properties live, and
+that module was a category error: those settings are lines in the device's
+Advanced options startup script, which the device replays at boot and which is
+managed over HTTP, not SapV2. Writing them live just produced values the next
+restart discarded. With that module gone the allow-list has no callers, so the
+guard is back to plain subtree classification.
 """
 
 from __future__ import absolute_import, division, print_function
@@ -94,8 +104,23 @@ SUBTREES = [
         "Logs#0", DECLARATIVE,
         "Log writers, subscriptions and MessageLogSettings. Nothing else writes "
         "here, and the worst case for getting it wrong is losing logs rather "
-        "than losing air - which is why this subtree was implemented first.",
-        implemented_by="pfc_logs",
+        "than losing air - which is why this subtree was implemented first. "
+        "Declarative with two exceptions: Logs#0.Ready is RW but reports "
+        "whether logging is up, and the LogRotator's LogFile children are "
+        "observed file stats.",
+        runtime_properties=[
+            # RW=BOL, reads True on a healthy device. Whatever it means, it is
+            # a statement ABOUT the log subsystem rather than a setting for it,
+            # and the plausible reading - "logging is running" - is one where
+            # writing it turns logging off. Nothing exposes it today; this is
+            # here so nothing can start to without deciding on purpose.
+            "Ready",
+            # Logs#0.LogRotator#0.LogFile#<name>: what the rotator has observed
+            # about each file on disk, not how it should treat them. Rotation
+            # policy is RotateRule#0, which IS managed.
+            "LogSize", "LastChanged", "RootFileName",
+        ],
+        implemented_by="logs",
         purge_safe=True,
         verify_scope="object",
     ),
@@ -183,6 +208,43 @@ SUBTREES = [
         "Not assessed.",
     ),
     Subtree(
+        "Clustering#0", UNCLASSIFIED,
+        "Node clustering. BufferInternalMessages and ChangeLocalHostName are "
+        "writable, but the subtree also exposes CreateCluster, JoinCluster, "
+        "LeaveCluster and ManualSync as write-only actions - the most "
+        "destructive operations on the device. Refused as a subtree; the one "
+        "service setting is reachable through the advanced-options allow-list.",
+    ),
+    Subtree(
+        "UserPanels#0", UNCLASSIFIED,
+        "Operator panel presentation. Several writable properties, but the "
+        "panels themselves have not been assessed and WritePanelPage is a "
+        "write-only action. The theme and filter settings are reachable "
+        "through the advanced-options allow-list.",
+    ),
+    Subtree(
+        "LegacyPanels#0", UNCLASSIFIED,
+        "Surveyed: 8 properties, only Ready writable. Nothing here worth "
+        "reconciling, and Ready is deliberately not exposed anywhere in this "
+        "collection.",
+    ),
+    Subtree(
+        "Meters#0", UNCLASSIFIED,
+        "Audio metering. Surveyed: CurrentMeteringPollRate, DefaultLowLevel "
+        "and DefaultClipLevel are writable, so it is configuration rather than "
+        "pure telemetry as first assumed. Left unclassified because changing "
+        "metering thresholds affects what operators see, and nobody has asked "
+        "for it.",
+    ),
+    Subtree(
+        "Requests#0", UNCLASSIFIED,
+        "Surveyed: 5 properties, none writable. Nothing to reconcile.",
+    ),
+    Subtree(
+        "UpdateModerators#0", UNCLASSIFIED,
+        "Surveyed: 2 properties, only Ready writable. Nothing to reconcile.",
+    ),
+    Subtree(
         "TimeEvents#0", UNCLASSIFIED,
         "Scheduled events. Probably declarative, but they fire actions, so "
         "treat as program-adjacent until measured.",
@@ -214,6 +276,11 @@ ACTION_PROPERTIES = frozenset([
     "RemoveDeviceIp", "RotateSource", "SendCriticalMessage",
     "SendLwcpCommand", "SendLwrpCommand", "SubmitSapMessage", "Trigger",
     "WriteSlot", "WriteTimer",
+    # Found when surveying the objects the Advanced options page touches.
+    # The clustering four are the most destructive actions on the device:
+    # LeaveCluster on the wrong node is a genuine outage.
+    "CreateCluster", "JoinCluster", "LeaveCluster", "ManualSync",
+    "FixPanelSecurity", "WritePanelPage",
 ])
 
 
@@ -256,6 +323,8 @@ class SubtreeGuard(object):
 
         if self.allow_all:
             return
+
+        props = list(properties or [])
 
         subtree = self.classify(path)
         if subtree is None:

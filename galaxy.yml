@@ -1,17 +1,19 @@
 ---
 namespace: at_blacknight
 name: pathfinder_core
-version: 0.1.0
+version: 0.1.0-alpha.14
 
 readme: README.md
 authors:
   - Adam Butler <github@at-blacknight.com>
 
 description: >-
-  Manage Telos/Axia PathfinderCore PRO broadcast router-control appliances over
-  their SapV2 API (TCP 9600). Provides a shared SapV2 client and per-subtree
-  reconcilers with read-back verification and an explicit runtime/config
-  boundary.
+  Manage Telos/Axia PathfinderCore PRO broadcast router-control appliances.
+  Reconciles the Logs subtree over the SapV2 API (TCP 9600) and the Advanced
+  options boot script over the web admin, with read-back verification on every
+  write and an explicit runtime/config boundary. Pre-1.0: logs and
+  startup_script are the only modules that change anything, survey reports, and
+  the users/access/devices modules are stubs that fail on invocation.
 
 license_file: LICENSE
 

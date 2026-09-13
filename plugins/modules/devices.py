@@ -10,15 +10,16 @@ __metaclass__ = type
 
 DOCUMENTATION = r"""
 ---
-module: pfc_devices
-short_description: Manage Devices#0 definitions on a PathfinderCore PRO (NOT IMPLEMENTED)
+module: devices
+short_description: STUB, always fails - Devices#0 device definitions
 version_added: "0.1.0"
 description:
   - B(This module is a stub and always fails.) It exists to hold the design
     constraints for the C(Devices#0) subtree.
-  - Third in the implementation order, after C(pfc_logs) and the
-    C(pfc_users)/C(pfc_access) pair. Higher blast radius than either: these are
-    the definitions of the audio devices the router controls.
+  - >-
+    Third in the implementation order, after C(logs) and the
+    C(users)/C(access) pair. Higher blast radius than either - these
+    are the definitions of the audio devices the router controls.
 options:
   host:
     description: Hostname or address of the PathfinderCore device.
@@ -34,7 +35,7 @@ notes:
     C(ResponseSuccess) are refused by the guard."
   - "That runtime-property list was derived from the log subscription
     catalogue - those are precisely the properties the device emits events for
-    - so it is inference, not measurement. Run C(pfc_survey) against
+    - so it is inference, not measurement. Run C(survey) against
     C(Devices#0) and reconcile the list against the real schema before
     implementing."
   - "Purge is not safe here and the registry says so. Devices may be created by
@@ -46,12 +47,12 @@ notes:
     touched."
   - "Deleting or re-addressing a device changes what the router can route.
     Treat any destructive action here as a change to broadcast capability and
-    default to refusing it, the way pfc_logs defaults to refusing a writer
+    default to refusing it, the way logs defaults to refusing a writer
     replacement."
 """
 
 EXAMPLES = r"""
-# Not implemented. See pfc_logs for the reconciler pattern this will follow.
+# Not implemented. See logs for the reconciler pattern this will follow.
 """
 
 RETURN = r"""
@@ -70,11 +71,11 @@ def main():
         supports_check_mode=True,
     )
     module.fail_json(
-        msg="pfc_devices is not implemented. Devices#0 is a MIXED subtree: "
+        msg="devices is not implemented. Devices#0 is a MIXED subtree: "
             "definitions are configuration but liveness and audio state are "
             "not, and the runtime-property list in the boundary registry is "
             "inferred from the log subscription catalogue rather than "
-            "measured. Run pfc_survey against Devices#0 first, and note that "
+            "measured. Run survey against Devices#0 first, and note that "
             "verification here must be property-scoped because another writer "
             "is updating the same objects continuously.")
 

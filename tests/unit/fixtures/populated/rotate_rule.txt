@@ -1,0 +1,1 @@
+indi Logs#0.LogRotator#0.RotateRule#0 RootFileName="*", MaxFileSize=100, MaxCount=10, SapId=0, FriendlyName="RotateRule#0", SapObjectType=RotateRule, SubVersion="2026-01-01T00:00:00.000+00:00"

@@ -1,0 +1,2 @@
+indi Logs#0.LogRotator#0 MinutesBetweenSearch=15, LastSearch="2026-01-01T00:00:00.000+00:00", SapId=0, FriendlyName="LogRotator#0", SapObjectType=LogRotator, SubVersion="2026-01-01T00:00:00.000+00:00" $MAX_DEPTH=-1
+indi Logs#0.LogRotator#0.RotateRule#0 RootFileName="*", MaxFileSize=1, MaxCount=3, SapId=0, FriendlyName="RotateRule#0", SapObjectType=RotateRule, SubVersion="2026-01-01T00:00:00.000+00:00" $MAX_DEPTH=-1 $DONE

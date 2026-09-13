@@ -1,0 +1,231 @@
+# -*- coding: utf-8 -*-
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Tests for the Advanced options startup-script parser.
+
+The script replays at boot and cannot be read or written over SapV2, so it is
+the one piece of desired state nothing else can check. These lock in that it
+is parsed as raw commands - a mapping keyed on known option names would
+silently drop the parts that matter most.
+"""
+import unittest
+
+from loader import startup
+
+# A real script, from a Core PRO.
+REAL = [
+    'NOP Devices#0.EndpointDiscoverers#0.LivewireEndpointDiscovery localAxiaIP="0.0.0.0"',
+    "SET Devices#0 LwrpVerPollingOnly=False",
+    "SET Routers#0 SkipSanityPoll=False",
+    "SET Clustering#0 BufferInternalMessages=False",
+    "SET LogicFlows#0 BufferInternalMessages=False",
+    "SET LogicFlows#0 TaskInternalMessages=False",
+    "SET Logs#0.LogRotator#0.RotateRule#0 MaxFileSize=100",
+    "SET Logs#0.LogRotator#0.RotateRule#0 MaxCount=10",
+    "SET Logs#0 SkipCleanLogs=False",
+    "SET Logs#0 CheckRotationAfterMaxWrites=250",
+    "SET MemorySlots#0 UseStagedWrites=True",
+    "SET Devices#0 LwcpSs=True",
+    "SET Devices#0 QorMonitor=True",
+    "SET Devices#0 FpStatPollRate=15000",
+    "SET UserPanels#0 DefaultTheme=default",
+]
+
+
+class TestParsing(unittest.TestCase):
+    def test_a_real_script_parses_completely(self):
+        commands, unparsed = startup.parse_script(REAL)
+        self.assertEqual(unparsed, [])
+        self.assertEqual(len(commands), len(REAL))
+
+    def test_more_than_one_verb_is_preserved(self):
+        commands, _unused = startup.parse_script(REAL)
+        self.assertEqual({c.verb for c in commands}, {"SET", "NOP"})
+
+    def test_nop_is_not_treated_as_a_property(self):
+        # Its name is an init-style parameter, a different vocabulary from
+        # property names, so it must not be compared against a live read.
+        commands, _unused = startup.parse_script([REAL[0]])
+        self.assertFalse(commands[0].is_property)
+        self.assertEqual(commands[0].name, "localAxiaIP")
+        self.assertEqual(commands[0].value, "0.0.0.0")
+
+    def test_quoted_values_are_unquoted(self):
+        commands, _unused = startup.parse_script(['SET X#0 Name="a b"'])
+        self.assertEqual(commands[0].value, "a b")
+
+    def test_comma_separated_assignments_become_separate_commands(self):
+        commands, _unused = startup.parse_script(["SET Logs#0.X#0 Lwrp=Both,Lwcp=None"])
+        self.assertEqual([(c.name, c.value) for c in commands],
+                         [("Lwrp", "Both"), ("Lwcp", "None")])
+
+    def test_blank_and_comment_lines_are_ignored(self):
+        commands, unparsed = startup.parse_script(["", "   ", "# a note"])
+        self.assertEqual((commands, unparsed), ([], []))
+
+    def test_unreadable_lines_are_reported_not_dropped(self):
+        # A line nobody can parse is still replayed every boot, so silence
+        # about it is the failure mode being avoided.
+        commands_unused, unparsed = startup.parse_script(["complete rubbish", "SET Logs#0"])
+        self.assertEqual(len(unparsed), 2)
+
+    def test_later_lines_win_matching_replay_order(self):
+        commands, _unused = startup.parse_script(
+            ["SET Logs#0 SkipCleanLogs=False", "SET Logs#0 SkipCleanLogs=True"])
+        index = startup.index_by_target(commands)
+        self.assertEqual(index[("Logs#0", "SkipCleanLogs")].value, "True")
+
+
+class TestBootVersusLive(unittest.TestCase):
+    def test_difference_is_reported(self):
+        commands, _unused = startup.parse_script(REAL)
+        live = {"Logs#0.LogRotator#0.RotateRule#0": {"MaxFileSize": "1",
+                                                     "MaxCount": "10"}}
+        drift, _absent = startup.boot_vs_live(commands, live)
+        self.assertEqual([(d["property"], d["live"], d["script"]) for d in drift],
+                         [("MaxFileSize", "1", "100")])
+
+    def test_property_the_device_does_not_expose_is_flagged(self):
+        # LwcpSs and QorMonitor are on this script and absent from the
+        # firmware, so those lines do nothing on every boot.
+        commands, _unused = startup.parse_script(REAL)
+        live = {"Devices#0": {"LwrpVerPollingOnly": "False",
+                              "FpStatPollRate": "15000"}}
+        _drift, absent = startup.boot_vs_live(commands, live)
+        self.assertEqual(sorted(a["property"] for a in absent),
+                         ["LwcpSs", "QorMonitor"])
+
+    def test_objects_not_read_are_skipped_rather_than_guessed(self):
+        commands, _unused = startup.parse_script(REAL)
+        drift, absent = startup.boot_vs_live(commands, {})
+        self.assertEqual((drift, absent), ([], []))
+
+    def test_nop_lines_are_not_compared(self):
+        commands, _unused = startup.parse_script([REAL[0]])
+        live = {"Devices#0.EndpointDiscoverers#0.LivewireEndpointDiscovery": {}}
+        _drift, absent = startup.boot_vs_live(commands, live)
+        self.assertEqual(absent, [])
+
+
+class TestConflicts(unittest.TestCase):
+    """Warn before a reboot undoes the change, not after."""
+
+    def setUp(self):
+        self.commands, _unused = startup.parse_script(REAL)
+
+    def test_a_value_the_script_will_undo_is_reported(self):
+        out = startup.conflicts(
+            [("Logs#0.LogRotator#0.RotateRule#0", "MaxFileSize", "1")],
+            self.commands)
+        self.assertEqual(len(out), 1)
+        self.assertIn("reverts at the next reboot", out[0])
+
+    def test_a_value_matching_the_script_is_not_reported(self):
+        self.assertEqual(startup.conflicts(
+            [("Logs#0.LogRotator#0.RotateRule#0", "MaxFileSize", "100")],
+            self.commands), [])
+
+    def test_a_property_absent_from_the_script_is_not_reported(self):
+        self.assertEqual(startup.conflicts(
+            [("Logs#0.LogRotator#0", "MinutesBetweenSearch", "12")],
+            self.commands), [])
+
+    def test_no_script_means_unchecked_not_safe(self):
+        # An empty result here means "not checked". It must not be read as
+        # proof that nothing will revert.
+        self.assertEqual(startup.conflicts(
+            [("Logs#0", "SkipCleanLogs", "True")], []), [])
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class TestScriptPathsMustBeRead(unittest.TestCase):
+    """boot_vs_live only checks paths it was given, so the caller must read
+    every path the SCRIPT mentions - not just the ones it models itself.
+
+    Getting this wrong is silent: the drift report simply comes back empty for
+    everything the caller did not happen to read, which looks identical to
+    "no drift".
+    """
+
+    def test_unread_paths_yield_no_drift_even_when_they_differ(self):
+        commands, _unused = startup.parse_script(
+            ["SET Logs#0.LogRotator#0.RotateRule#0 MaxFileSize=90"])
+        # Caller read some other object entirely.
+        drift, absent = startup.boot_vs_live(commands, {"Devices#0": {"X": "1"}})
+        self.assertEqual((drift, absent), ([], []))
+
+    def test_reading_the_scripts_own_paths_finds_the_drift(self):
+        commands, _unused = startup.parse_script(
+            ["SET Logs#0.LogRotator#0.RotateRule#0 MaxFileSize=90"])
+        live = {"Logs#0.LogRotator#0.RotateRule#0": {"MaxFileSize": "100"}}
+        drift, _absent = startup.boot_vs_live(commands, live)
+        self.assertEqual([(d["live"], d["script"]) for d in drift], [("100", "90")])
+
+    def test_property_paths_are_discoverable_from_the_commands(self):
+        # This is what the module uses to decide what to read.
+        commands, _unused = startup.parse_script(REAL)
+        paths = {c.path for c in commands if c.is_property}
+        self.assertIn("Logs#0.LogRotator#0.RotateRule#0", paths)
+        self.assertIn("UserPanels#0", paths)
+        # The NOP line's object is excluded: its name is not a property.
+        self.assertNotIn(
+            "Devices#0.EndpointDiscoverers#0.LivewireEndpointDiscovery", paths)
+
+
+class TestUnverifiableLines(unittest.TestCase):
+    """A property SapV2 cannot see is not proof the line does nothing.
+
+    These were reported as "dead lines that do nothing every boot" until the
+    device's own FACTORY DEFAULT script turned out to contain both of them.
+    The startup file has its own loader - Devices#0.StartupFileProcessed exists
+    because of it - which understands directives the object model never
+    surfaces as properties.
+    """
+
+    SCRIPT = [
+        "SET Devices#0 LwcpSs=True",
+        "SET Devices#0 QorMonitor=True",
+        "SET Devices#0 Invented=True",
+        "SET Logs#0 SkipCleanLogs=False",
+    ]
+    #: Both ship with the device; "Invented" does not.
+    FACTORY = ["SET Devices#0 LwcpSs=True", "SET Devices#0 QorMonitor=True"]
+    LIVE = {"Devices#0": {"FpStatPollRate": "1000"},
+            "Logs#0": {"SkipCleanLogs": "False"}}
+
+    def _run(self):
+        commands, _unparsed = startup.parse_script(self.SCRIPT)
+        return startup.boot_vs_live(commands, self.LIVE, self.FACTORY)
+
+    def test_a_vendor_shipped_directive_is_flagged_as_such(self):
+        _drift, unverifiable = self._run()
+        shipped = dict((u["property"], u) for u in unverifiable)
+        self.assertTrue(shipped["LwcpSs"]["in_factory_defaults"])
+        self.assertTrue(shipped["QorMonitor"]["in_factory_defaults"])
+        self.assertIn("leave it alone", shipped["LwcpSs"]["reason"])
+
+    def test_one_the_vendor_does_not_ship_is_distinguished(self):
+        _drift, unverifiable = self._run()
+        invented = [u for u in unverifiable if u["property"] == "Invented"][0]
+        self.assertFalse(invented["in_factory_defaults"])
+        self.assertIn("worth checking", invented["reason"].lower()
+                      .replace("check it before", "worth checking"))
+
+    def test_it_no_longer_claims_the_line_does_nothing(self):
+        _drift, unverifiable = self._run()
+        for entry in unverifiable:
+            self.assertNotIn("does nothing", entry["reason"])
+
+    def test_a_readable_property_is_not_listed(self):
+        _drift, unverifiable = self._run()
+        self.assertNotIn("SkipCleanLogs",
+                         [u["property"] for u in unverifiable])
+
+    def test_it_works_without_the_factory_list(self):
+        # compare_live can run before the factory script is known.
+        commands, _unparsed = startup.parse_script(self.SCRIPT)
+        _drift, unverifiable = startup.boot_vs_live(commands, self.LIVE)
+        self.assertEqual(len(unverifiable), 3)
+        self.assertFalse(any(u["in_factory_defaults"] for u in unverifiable))

@@ -10,14 +10,14 @@ __metaclass__ = type
 
 DOCUMENTATION = r"""
 ---
-module: pfc_users
-short_description: Manage SapV2 accounts on a PathfinderCore PRO (NOT IMPLEMENTED)
+module: users
+short_description: STUB, always fails - SapV2 accounts on a PathfinderCore PRO
 version_added: "0.1.0"
 description:
   - B(This module is a stub and always fails.) It exists to hold the design
     constraints already measured for the C(Users#0) subtree so that whoever
     implements it does not rediscover them.
-  - Second in the implementation order after C(pfc_logs), chosen for value
+  - Second in the implementation order after C(logs), chosen for value
     rather than blast radius - account and access control is what a hardening
     programme actually wants.
 options:
@@ -62,7 +62,7 @@ notes:
 """
 
 EXAMPLES = r"""
-# Not implemented. See pfc_logs for the reconciler pattern this will follow.
+# Not implemented. See logs for the reconciler pattern this will follow.
 """
 
 RETURN = r"""
@@ -83,7 +83,7 @@ def main():
     # Fails rather than no-ops on purpose. A stub that quietly reports
     # changed=false would let a playbook claim it had reconciled accounts.
     module.fail_json(
-        msg="pfc_users is not implemented. The schema is now measured and the "
+        msg="users is not implemented. The schema is now measured and the "
             "design is unblocked: SapUser has Username RO and Password RW, "
             "the access-control properties (IsAdmin, SecurityPaths, "
             "MenuItems) live on the UserSecurity child and are all RW, and "

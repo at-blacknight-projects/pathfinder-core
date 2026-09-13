@@ -1,0 +1,10 @@
+# The collection is developed on Windows but consumed on Linux, and
+# ansible-test's line-endings sanity check rejects CRLF. Normalise on commit so
+# the checked-in content is always LF regardless of the contributor's platform.
+* text=auto eol=lf
+
+# Except the recorded device replies. SapV2 frames with CRLF and these files are
+# captures, not source - normalising them would silently turn a recording into
+# an edited transcript, which is the one thing the corpus exists to avoid.
+# ansible-test is told to skip line-endings for them in tests/sanity/.
+tests/unit/fixtures/** -text

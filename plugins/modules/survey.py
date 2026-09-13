@@ -10,8 +10,8 @@ __metaclass__ = type
 
 DOCUMENTATION = r"""
 ---
-module: pfc_survey
-short_description: Read-only schema survey of a PathfinderCore object tree
+module: survey
+short_description: READ-ONLY schema survey of a PathfinderCore object tree
 version_added: "0.1.0"
 description:
   - Walks a PathfinderCore PRO object tree and records each object type's
@@ -83,8 +83,8 @@ author:
 
 EXAMPLES = r"""
 - name: Survey the sandbox device and save the snapshot
-  at_blacknight.pathfinder_core.pfc_survey:
-    host: dev-vdm-001.example.net
+  at_blacknight.pathfinder_core.survey:
+    host: pfc-sandbox.example.net
     username: "{{ lookup('env', 'PFC_USER') }}"
     password: "{{ lookup('env', 'PFC_PASS') }}"
   register: pfc_schema
@@ -100,7 +100,7 @@ EXAMPLES = r"""
     var: pfc_schema.write_only
 
 - name: Bounded first look at a large tree
-  at_blacknight.pathfinder_core.pfc_survey:
+  at_blacknight.pathfinder_core.survey:
     host: "{{ inventory_hostname }}"
     username: "{{ pfc_username }}"
     password: "{{ pfc_password }}"

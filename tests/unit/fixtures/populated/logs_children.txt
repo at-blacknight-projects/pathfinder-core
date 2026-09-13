@@ -1,0 +1,16 @@
+indi Logs#0.LogFileWriter#[Connected_Msg.log]
+indi Logs#0.LogFileWriter#[Device_Emulators.log]
+indi Logs#0.LogFileWriter#[Incoming.log]
+indi Logs#0.LogFileWriter#[Logic_Flows.log]
+indi Logs#0.LogFileWriter#[Logins.log]
+indi Logs#0.LogFileWriter#[Memory_Slots.log]
+indi Logs#0.LogFileWriter#[Outgoing_.log]
+indi Logs#0.LogFileWriter#[ProDEVty_Groups.log]
+indi Logs#0.LogFileWriter#[RestAPI.log]
+indi Logs#0.LogFileWriter#[Routes_and_GPIO.log]
+indi Logs#0.LogFileWriter#[SAPv2Log.log]
+indi Logs#0.LogFileWriter#[Scenes.log]
+indi Logs#0.LogFileWriter#[VMIX.log]
+indi Logs#0.LogRotator#0
+indi Logs#0.TcpClientWriter#legacy_collector
+indi Logs#0.UdpSysLogWriter#alloy_site1

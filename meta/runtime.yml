@@ -1,12 +1,17 @@
 ---
 # PathfinderCore devices are reached over TCP, never over an Ansible connection
-# plugin, so every module in this collection runs on the controller. 2.14 is the
-# floor purely for the argument-spec features used here.
-requires_ansible: ">=2.14.0"
+# plugin, so every module in this collection runs on the controller.
+#
+# 2.16 because that is what is actually tested. The previous floor of 2.14 was
+# picked from which argument-spec features the code uses, which is a claim about
+# what ought to work rather than about what has been run - and 2.14 is now out
+# of support, so nothing would ever check it again. Claim what CI proves.
+requires_ansible: ">=2.16.0"
 
 action_groups:
   pathfinder_core:
-    - pfc_logs
-    - pfc_users
-    - pfc_access
-    - pfc_devices
+    - logs
+    - startup_script
+    - users
+    - access
+    - devices

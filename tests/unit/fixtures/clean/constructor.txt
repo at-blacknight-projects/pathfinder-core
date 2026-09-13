@@ -1,0 +1,1 @@
+indi MemorySlots#0.MemorySlot#Test1 Constructor=%BeginEncap%init MemorySlots#0.MemorySlot slotName=Test1, slotValue="", persistent=True, startupState=Blank $LAST_UPDATE=2026-01-01T00:00:00.000+00:00%EndEncap%

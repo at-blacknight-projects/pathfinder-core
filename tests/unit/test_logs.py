@@ -144,7 +144,7 @@ class TestSubscriptionImmutability(unittest.TestCase):
 class TestWriterImmutability(unittest.TestCase):
     def test_endpoint_change_is_blocked_by_default(self):
         actual = actual_converged()
-        actual["properties"]["RemoteEndpointUri"] = "udp://10.0.0.1:514/"
+        actual["properties"]["RemoteEndpointUri"] = "udp://192.0.2.99:514/"
         actions = logs.plan(desired(), actual)
         self.assertEqual([a.kind for a in actions], ["blocked_immutable"])
 
@@ -152,13 +152,13 @@ class TestWriterImmutability(unittest.TestCase):
         # Nothing else should be planned against a writer we are refusing to
         # touch.
         actual = actual_converged()
-        actual["properties"]["RemoteEndpointUri"] = "udp://10.0.0.1:514/"
+        actual["properties"]["RemoteEndpointUri"] = "udp://192.0.2.99:514/"
         actual["subscriptions"] = {}
         self.assertEqual(len(logs.plan(desired(), actual)), 1)
 
     def test_replace_when_explicitly_allowed(self):
         actual = actual_converged()
-        actual["properties"]["RemoteEndpointUri"] = "udp://10.0.0.1:514/"
+        actual["properties"]["RemoteEndpointUri"] = "udp://192.0.2.99:514/"
         actions = logs.plan(desired(), actual, on_immutable_change="replace")
         self.assertEqual(actions[0].kind, "writer_replace")
         self.assertTrue(actions[0].destructive)
@@ -167,7 +167,7 @@ class TestWriterImmutability(unittest.TestCase):
         # The old object and its children are gone, so all of them must be
         # planned again even though they looked present.
         actual = actual_converged()
-        actual["properties"]["RemoteEndpointUri"] = "udp://10.0.0.1:514/"
+        actual["properties"]["RemoteEndpointUri"] = "udp://192.0.2.99:514/"
         kinds = [a.kind for a in
                  logs.plan(desired(), actual, on_immutable_change="replace")]
         self.assertEqual(kinds, ["writer_replace", "subscription_create",
@@ -237,7 +237,7 @@ class TestApply(unittest.TestCase):
     def test_blocked_action_writes_nothing(self):
         client = FakeClient()
         actual = actual_converged()
-        actual["properties"]["RemoteEndpointUri"] = "udp://10.0.0.1:514/"
+        actual["properties"]["RemoteEndpointUri"] = "udp://192.0.2.99:514/"
         actions = logs.plan(desired(), actual)
         logs.apply_plan(client, desired(), actions)
         self.assertEqual(client.writes, [])
@@ -308,7 +308,7 @@ class TestValidation(unittest.TestCase):
 
 class TestPathHelpers(unittest.TestCase):
     def test_expected_uri_is_built_from_a_bare_ip(self):
-        self.assertEqual(logs.expected_uri("10.1.2.3"), "udp://10.1.2.3:514/")
+        self.assertEqual(logs.expected_uri("192.0.2.33"), "udp://192.0.2.33:514/")
 
     def test_dotted_writer_name_is_bracket_quoted(self):
         self.assertEqual(logs.writer_path("alloy.site1"),

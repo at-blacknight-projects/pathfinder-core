@@ -1,0 +1,373 @@
+---
+# Live smoke test against a real PathfinderCore PRO.
+#
+# NOT run by CI and not runnable there: it needs hardware. Run it deliberately
+# before cutting a release, against a device you are certain nobody else is
+# using.
+#
+#   export PFC_USER=... PFC_PASS=...
+#   ansible-playbook tests/integration/smoke.yml -e pfc_host=<address>
+#
+# Everything it creates is named with the PREFIX below, so its objects are
+# identifiable at a glance by anyone else looking at the device. It refuses to
+# start if any object with that prefix already exists, because that means a
+# previous run died without cleaning up - and it deletes nothing it did not
+# create.
+#
+# See README.md in this directory for why it is a playbook rather than an
+# ansible-test integration target.
+- name: PathfinderCore live smoke test
+  hosts: localhost
+  gather_facts: false
+  connection: local
+
+  vars:
+    prefix: zzitest_
+    udp_writer: "zzitest_udp"
+    file_writer: "zzitest_file.log"
+    listener_writer: "zzitest_listener"
+    tcp_writer: "zzitest_tcp"
+    # RFC 5737. Nothing listens on these, which is the point - a writer must be
+    # creatable and verifiable without anything receiving from it.
+    sink_a: 192.0.2.10
+    sink_b: 192.0.2.20
+    common: &common
+      host: "{{ pfc_host }}"
+      username: "{{ lookup('env', 'PFC_USER') }}"
+      password: "{{ lookup('env', 'PFC_PASS') }}"
+    catalogue:
+      - typeid: 1001
+        subscription: "sub Devices#0 Connected $MAX_DEPTH=-1"
+        severity: Warning
+        customname: smoke-connected
+      - typeid: 7002
+        subscription: "sub Devices#0 GAIN $MAX_DEPTH=-1"
+        severity: Informational
+        customname: smoke-gain
+
+  tasks:
+    - name: Require pfc_host to be given explicitly
+      ansible.builtin.assert:
+        that: pfc_host is defined and pfc_host | length > 0
+        fail_msg: >-
+          Pass -e pfc_host=<address>. There is deliberately no default: this
+          playbook creates and deletes objects, and a default address is how
+          that happens to the wrong device.
+        quiet: true
+
+    - name: Credentials are present
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'PFC_USER') | length > 0
+          - lookup('env', 'PFC_PASS') | length > 0
+        fail_msg: "Export PFC_USER and PFC_PASS."
+        quiet: true
+
+    # ── Preflight ────────────────────────────────────────────────────────────
+    # The check that would have caught the debris left on a shared device
+    # earlier: a previous run that died mid-way leaves objects behind, and
+    # running again on top of them makes the results meaningless.
+    - name: Read the device before touching it
+      at_blacknight.pathfinder_core.logs:
+        <<: *common
+        writers: []
+        unmanaged_writers: report
+      register: before
+      check_mode: true
+
+    - name: Refuse to run if a previous attempt left anything behind
+      ansible.builtin.assert:
+        that: leftovers | length == 0
+        fail_msg: >-
+          Found {{ leftovers | length }} object(s) from an earlier run:
+          {{ leftovers | join(', ') }}. Remove them before running again -
+          this playbook will not clean up after a run it did not make.
+        quiet: true
+      vars:
+        leftovers: >-
+          {{ before.unmanaged | default([]) | map(attribute='name')
+             | select('match', '^' ~ prefix) | list }}
+
+    - name: Record what the device looked like beforehand
+      ansible.builtin.set_fact:
+        writers_before: "{{ before.unmanaged | default([]) | map(attribute='name') | sort | list }}"
+
+    # Rotation is DEVICE-scoped, not per-writer, so deleting the test writers
+    # does not undo it. The first run of this playbook set it and left it set -
+    # a permanent change to a device we promised only to borrow. Read it now so
+    # teardown can put it back.
+    - name: Record the rotation settings so they can be restored
+      at_blacknight.pathfinder_core.logs:
+        <<: *common
+        writers: []
+      register: rotation_before
+      check_mode: true
+
+    - name: Keep the values teardown has to restore
+      ansible.builtin.set_fact:
+        rotation_original:
+          max_file_size: "{{ rule.MaxFileSize }}"
+          max_count: "{{ rule.MaxCount }}"
+      vars:
+        rule: "{{ rotation_before.rotation['Logs#0.LogRotator#0.RotateRule#0'] }}"
+
+    - name: Report the starting point
+      ansible.builtin.debug:
+        msg: >-
+          {{ pfc_host }} has {{ writers_before | length }} writer(s) before we
+          start. None of them will be touched.
+
+    # ── The tests ────────────────────────────────────────────────────────────
+    - name: Exercise the device, cleaning up whatever happens
+      block:
+        - name: 1. Create a udp_syslog writer with subscriptions and settings
+          at_blacknight.pathfinder_core.logs:
+            <<: *common
+            writers:
+              - name: "{{ udp_writer }}"
+                ip: "{{ sink_a }}"
+            subscriptions: "{{ catalogue }}"
+            message_log_settings: {Lwrp: Both, LoginFailures: true}
+          register: created
+
+        - name: 1. Assert
+          ansible.builtin.assert:
+            that:
+              - created.changed
+              - created.verified
+              - created.writers[0].exists
+              - created.writers[0].properties.RemoteEndpointUri == 'udp://' ~ sink_a ~ ':514/'
+              - created.writers[0].subscriptions | length == 2
+              - created.writers[0].message_log_settings.Lwrp == 'Both'
+            quiet: true
+
+        - name: 2. Re-run unchanged
+          at_blacknight.pathfinder_core.logs:
+            <<: *common
+            writers:
+              - name: "{{ udp_writer }}"
+                ip: "{{ sink_a }}"
+            subscriptions: "{{ catalogue }}"
+            message_log_settings: {Lwrp: Both, LoginFailures: true}
+          register: rerun
+
+        - name: 2. Assert it is idempotent
+          ansible.builtin.assert:
+            that:
+              - not rerun.changed
+              - rerun.plan | length == 0
+              - not rerun.verified          # nothing written, so nothing verified
+            fail_msg: "NOT IDEMPOTENT: {{ rerun.plan | map(attribute='summary') | list }}"
+            quiet: true
+
+        - name: 3. A silently-ignored value must be caught by read-back
+          at_blacknight.pathfinder_core.logs:
+            <<: *common
+            writers:
+              - name: "{{ udp_writer }}"
+                ip: "{{ sink_a }}"
+            message_log_settings: {Lwrp: In}
+          register: ignored
+          ignore_errors: true
+
+        - name: 3. Assert it was refused before the wire
+          ansible.builtin.assert:
+            that:
+              - ignored is failed
+              - "'silently ignored' in ignored.msg"
+            fail_msg: >-
+              Lwrp=In was not rejected. The device accepts this value and
+              discards it, so anything that lets it through reports a change
+              that did not happen.
+            quiet: true
+
+        - name: 4. Re-pointing an existing writer is refused
+          at_blacknight.pathfinder_core.logs:
+            <<: *common
+            writers:
+              - name: "{{ udp_writer }}"
+                ip: "{{ sink_b }}"
+          register: repoint
+          ignore_errors: true
+
+        - name: 4. Assert
+          ansible.builtin.assert:
+            that:
+              - repoint is failed
+              - "'read-only' in repoint.msg"
+            quiet: true
+
+        - name: 5. Create a log_file and a tcp_listener
+          at_blacknight.pathfinder_core.logs:
+            <<: *common
+            writers:
+              - name: "{{ file_writer }}"
+                type: log_file
+              - name: "{{ listener_writer }}"
+                type: tcp_listener
+                port: 1515
+            subscriptions: []
+          register: others
+
+        - name: 5. Assert both exist with the right endpoints
+          ansible.builtin.assert:
+            that:
+              - others.changed and others.verified
+              - others.writers | selectattr('exists') | list | length == 2
+              - (others.writers | selectattr('type', 'eq', 'tcp_listener') | first).properties.EndpointId == '0.0.0.0:1515'
+            quiet: true
+
+        - name: 6. A tcp_listener without a port is refused, not left as a zombie
+          at_blacknight.pathfinder_core.logs:
+            <<: *common
+            writers:
+              - name: "{{ prefix }}zombie"
+                type: tcp_listener
+          register: zombie
+          ignore_errors: true
+
+        - name: 6. Assert
+          ansible.builtin.assert:
+            that:
+              - zombie is failed
+              - "'requires' in zombie.msg"
+            quiet: true
+
+        # The type that was believed uncreatable. Slow on purpose: the device
+        # dials out on creation and its replies queue behind that.
+        - name: 7. Create a tcp_client (needs autoReconnect; takes ~30s)
+          at_blacknight.pathfinder_core.logs:
+            <<: *common
+            writers:
+              - name: "{{ tcp_writer }}"
+                type: tcp_client
+                ip: "{{ sink_b }}"
+                port: 1515
+                properties: {OfflineMaxCacheCount: 25}
+            subscriptions: []
+          register: tcp
+
+        - name: 7. Assert it was created and configured
+          ansible.builtin.assert:
+            that:
+              - tcp.changed and tcp.verified
+              - tcp.writers[0].exists
+              - tcp.writers[0].properties.RemoteEndpointUri == 'tcp://' ~ sink_b ~ ':1515/'
+              - tcp.writers[0].properties.OfflineMaxCacheCount == '25'
+            fail_msg: >-
+              tcp_client creation failed. This type was recorded as impossible
+              until autoReconnect was found to be load-bearing - if this breaks,
+              re-measure the init form before assuming the module is wrong.
+            quiet: true
+
+        - name: 8. Rotation
+          at_blacknight.pathfinder_core.logs:
+            <<: *common
+            writers:
+              - name: "{{ udp_writer }}"
+                ip: "{{ sink_a }}"
+            rotation: {max_file_size: 7, max_count: 4}
+          register: rotation
+
+        # Assert on the VALUES, not on `verified`. verified is only true when
+        # something was written, so demanding it makes the test pass once and
+        # fail on every re-run against a device already holding these values -
+        # which is what happened, and is also the shape of a test that quietly
+        # depends on running against a pristine device.
+        - name: 8. Assert the values are what was asked for
+          ansible.builtin.assert:
+            that:
+              - rule.MaxFileSize == '7'
+              - rule.MaxCount == '4'
+            quiet: true
+          vars:
+            rule: "{{ rotation.rotation['Logs#0.LogRotator#0.RotateRule#0'] }}"
+
+        - name: 9. Unmanaged writers are scoped to the named types
+          at_blacknight.pathfinder_core.logs:
+            <<: *common
+            writers:
+              - name: "{{ udp_writer }}"
+                ip: "{{ sink_a }}"
+            unmanaged_writers: report
+          register: unmanaged
+          check_mode: true
+
+        - name: 9. Assert the log_file writer is seen but out of scope
+          ansible.builtin.assert:
+            that:
+              - file_entry | length == 1
+              - not file_entry[0].in_purge_scope
+              - file_entry[0].action == 'out_of_scope'
+            fail_msg: >-
+              A purge driven by a udp_syslog writer must never consider a
+              log_file writer - that is what stops it deleting the device's own
+              log files.
+            quiet: true
+          vars:
+            file_entry: >-
+              {{ unmanaged.unmanaged | selectattr('name', 'eq', file_writer) | list }}
+
+      always:
+        # ── Teardown ─────────────────────────────────────────────────────────
+        # Runs on failure too. The deletion is then VERIFIED by reading back,
+        # because a read taken straight after a write on this device has
+        # already been observed returning empty for an object that exists.
+        - name: Remove everything this run created
+          at_blacknight.pathfinder_core.logs:
+            <<: *common
+            state: absent
+            writers:
+              - name: "{{ udp_writer }}"
+              - name: "{{ tcp_writer }}"
+                type: tcp_client
+              - name: "{{ listener_writer }}"
+                type: tcp_listener
+              - name: "{{ file_writer }}"
+                type: log_file
+              - name: "{{ prefix }}zombie"
+                type: tcp_listener
+          register: teardown
+          ignore_errors: true
+
+        - name: Put the rotation settings back
+          at_blacknight.pathfinder_core.logs:
+            <<: *common
+            writers: []
+            rotation: "{{ rotation_original }}"
+          register: rotation_restored
+          when: rotation_original is defined
+          ignore_errors: true
+
+        - name: Confirm the device is exactly as we found it
+          at_blacknight.pathfinder_core.logs:
+            <<: *common
+            writers: []
+            unmanaged_writers: report
+          register: after
+          check_mode: true
+          ignore_errors: true
+
+        - name: Teardown left nothing behind and changed nothing device-wide
+          ansible.builtin.assert:
+            that:
+              - survivors | length == 0
+              - writers_now == writers_before
+              - rule_now.MaxFileSize == rotation_original.max_file_size
+              - rule_now.MaxCount == rotation_original.max_count
+            fail_msg: >-
+              CLEANUP FAILED. Writers still present: {{ survivors | join(', ') }}.
+              Rotation is {{ rule_now.MaxFileSize }}/{{ rule_now.MaxCount }},
+              was {{ rotation_original.max_file_size }}/{{ rotation_original.max_count }}.
+              Put these right by hand before running again.
+            success_msg: >-
+              Device restored: {{ writers_now | length }} writer(s) and rotation
+              {{ rule_now.MaxFileSize }}/{{ rule_now.MaxCount }}, exactly as found.
+            quiet: true
+          vars:
+            survivors: >-
+              {{ after.unmanaged | default([]) | map(attribute='name')
+                 | select('match', '^' ~ prefix) | list }}
+            writers_now: >-
+              {{ after.unmanaged | default([]) | map(attribute='name') | sort | list }}
+            rule_now: "{{ after.rotation['Logs#0.LogRotator#0.RotateRule#0'] }}"

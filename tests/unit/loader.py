@@ -22,7 +22,9 @@ if MODULE_UTILS not in sys.path:
 
 import logs  # noqa: E402,F401
 import sapv2  # noqa: E402,F401
+import startup  # noqa: E402,F401
+import webadmin  # noqa: E402,F401
 import subtrees  # noqa: E402,F401
 import survey  # noqa: E402,F401
 
-__all__ = ["logs", "sapv2", "subtrees", "survey"]
+__all__ = ["logs", "sapv2", "startup", "subtrees", "survey", "webadmin"]
