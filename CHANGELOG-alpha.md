@@ -1,3 +1,15 @@
+## [0.1.0-alpha.13](https://github.com/at-blacknight-projects/pathfinder-core/compare/v0.1.0-alpha.12...v0.1.0-alpha.13) (2026-09-13)
+
+
+### Bug Fixes
+
+* **startup:** stop calling unreadable script lines dead, and fix rfs parsing ([4c417b9](https://github.com/at-blacknight-projects/pathfinder-core/commit/4c417b9e599890171a00f8b6046219b47306bc96)), closes [Devices#0](https://github.com/at-blacknight-projects/Devices/issues/0) [Devices#0](https://github.com/at-blacknight-projects/Devices/issues/0) [Devices#0](https://github.com/at-blacknight-projects/Devices/issues/0) [Devices#0](https://github.com/at-blacknight-projects/Devices/issues/0) [Logs#0](https://github.com/at-blacknight-projects/Logs/issues/0)
+
+
+### Documentation
+
+* make it obvious which modules actually do anything ([9811f9b](https://github.com/at-blacknight-projects/pathfinder-core/commit/9811f9be4fc722ad0e38dae1048af6d303fa604a)), closes [System#0](https://github.com/at-blacknight-projects/System/issues/0) [.Access#0](https://github.com/at-blacknight-projects/.Access/issues/0) [Devices#0](https://github.com/at-blacknight-projects/Devices/issues/0)
+
 ## [0.1.0-alpha.12](https://github.com/at-blacknight-projects/pathfinder-core/compare/v0.1.0-alpha.11...v0.1.0-alpha.12) (2026-09-13)
 
 
