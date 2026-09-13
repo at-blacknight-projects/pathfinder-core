@@ -244,15 +244,23 @@ options:
       - >-
         C(ignore) (the default) leaves them completely alone and does not even
         look. C(report) lists them in the C(unmanaged) return value without
-        changing anything. C(purge) deletes them.
+        changing anything. C(purge) deletes those it is allowed to.
       - >-
-        All three are scoped to the writer B(types) named in I(writers), and
-        that scoping is a safety property rather than a convenience. A Core PRO
-        ships with around a dozen LogFileWriters of its own; a task managing one
-        C(udp_syslog) writer has no business forming an opinion about those.
+        C(report) lists writers of B(every) type, because the honest answer to
+        "what else is on this device" includes the dozen LogFileWriters a Core
+        PRO ships with and any legacy TCP writer - the latter being exactly what
+        an estate migration wants surfaced.
+      - >-
+        C(purge) is narrower, and deliberately: it only ever deletes writers of
+        the B(types) named in I(writers). That is what stops a task managing one
+        C(udp_syslog) writer from sweeping away the device's own log files.
         Measured on a real device - 15 writers present, a playbook naming one -
         an unscoped purge would delete all 15, while the scoped one deletes
         exactly the stale writer that was the point.
+      - >-
+        Each entry carries C(in_purge_scope) saying which of the two it falls
+        under, so a report of five writers cannot be mistaken for five pending
+        deletions. Out-of-scope entries are reported with C(action=out_of_scope).
       - >-
         C(purge) never deletes a type that cannot be recreated. A C(tcp_client)
         is skipped and reported rather than removed, because a purge is the one
@@ -503,8 +511,14 @@ writers:
       type: dict
 unmanaged:
   description:
-    - Writers found on the device that I(writers) did not name, each with the
-      C(action) taken - C(reported), C(delete) or C(skipped).
+    - >-
+      Writers found on the device that I(writers) did not name - of every type,
+      with C(in_purge_scope) marking those a purge would consider and
+      C(endpoint) recording where each pointed while that is still readable.
+    - >-
+      C(action) is C(reported) (in scope, untouched), C(out_of_scope) (a type
+      this task does not manage, never touched), C(delete), or C(skipped) (in
+      scope but not recreatable, so not deleted).
     - >-
       Always empty when I(unmanaged_writers) is C(ignore), which means "not
       looked for", NOT "there were none".

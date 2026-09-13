@@ -94,6 +94,17 @@ class FakeDevice(object):
                 out[key] = value
         return out
 
+    def tree(self, path, depth=-1):
+        """The object and every descendant, as the real client returns them.
+
+        The real one needs two commands because $MAX_DEPTH excludes the object
+        named in the request; that detail is the client's problem, and by the
+        time a caller sees the result the object is in it.
+        """
+        self.reads_issued = getattr(self, "reads_issued", 0) + 1
+        return dict((k, v) for k, v in self.reads.items()
+                    if k == path or k.startswith(path + "."))
+
     def verbs(self):
         return [(verb, path) for verb, path, _payload in self.writes]
 
@@ -420,26 +431,52 @@ class TestUnmanagedWriters(unittest.TestCase):
         self.assertEqual(plan.unmanaged, [])
         self.assertEqual(plan.actions, [])
 
-    def test_report_lists_them_without_changing_anything(self):
+    def test_report_lists_every_type_not_just_the_managed_one(self):
+        # Reporting is non-destructive, so the honest answer to "what else is
+        # on this device" includes the log files and the legacy TCP writer -
+        # the latter being exactly what an estate migration wants surfaced.
         device = self.device()
         plan = logs.plan_device(device, [writer("alloy_site1")],
                                 unmanaged="report")
-        self.assertEqual([u["name"] for u in plan.unmanaged], ["stale_one"])
-        self.assertEqual(plan.unmanaged[0]["action"], "reported")
+        self.assertEqual(
+            sorted(u["name"] for u in plan.unmanaged),
+            ["Connected_Msg.log", "SAPv2Log.log", "Scenes.log", "legacy",
+             "stale_one"])
         # Reporting is not a change.
         self.assertEqual(plan.actions, [])
         self.assertFalse(plan.changed)
 
-    def test_other_types_are_out_of_scope_even_for_purge(self):
-        # The whole point: a task naming a udp_syslog writer must not reason
-        # about the device's own log files or the legacy TCP writer.
+    def test_report_marks_what_a_purge_would_actually_touch(self):
+        # Listing more than a purge would delete is only safe if the difference
+        # is visible, or someone reads five entries and expects five deletions.
+        device = self.device()
+        plan = logs.plan_device(device, [writer("alloy_site1")],
+                                unmanaged="report")
+        by_name = dict((u["name"], u) for u in plan.unmanaged)
+        self.assertTrue(by_name["stale_one"]["in_purge_scope"])
+        self.assertEqual(by_name["stale_one"]["action"], "reported")
+        for name in ("SAPv2Log.log", "legacy"):
+            self.assertFalse(by_name[name]["in_purge_scope"])
+            self.assertEqual(by_name[name]["action"], "out_of_scope")
+
+    def test_purge_deletes_only_the_managed_type(self):
+        # The whole point: a task naming a udp_syslog writer must not delete
+        # the device's own log files or the legacy TCP writer.
         device = self.device()
         plan = logs.plan_device(device, [writer("alloy_site1")],
                                 unmanaged="purge")
-        self.assertEqual([u["name"] for u in plan.unmanaged], ["stale_one"])
         deleted = [a.to_dict()["writer"] for a in plan.actions
                    if a.kind == "writer_delete"]
         self.assertEqual(deleted, ["stale_one"])
+        self.assertEqual(
+            sorted(u["name"] for u in plan.unmanaged if u["action"] == "delete"),
+            ["stale_one"])
+
+    def test_one_read_regardless_of_how_many_writers_exist(self):
+        device = self.device()
+        logs.plan_device(device, [writer("alloy_site1")], unmanaged="report")
+        # The listing is a single deep read, not one per writer.
+        self.assertEqual(getattr(device, "reads_issued", 0), 2)
 
     def test_a_tcp_client_is_purgeable_now_that_it_can_be_recreated(self):
         # It used to be skipped, on the belief that a TcpClientWriter could not
@@ -462,7 +499,11 @@ class TestUnmanagedWriters(unittest.TestCase):
         device = self.device()
         plan = logs.plan_device(device, [writer("alloy_site1")],
                                 unmanaged="report")
-        self.assertEqual(plan.unmanaged[0]["endpoint"], URI)
+        by_name = dict((u["name"], u) for u in plan.unmanaged)
+        self.assertEqual(by_name["stale_one"]["endpoint"], URI)
+        # A log_file writer has no endpoint property, so it carries no endpoint
+        # rather than an empty one.
+        self.assertNotIn("endpoint", by_name["SAPv2Log.log"])
 
     def test_purge_deletes_run_after_the_creates_verify(self):
         device = self.device()

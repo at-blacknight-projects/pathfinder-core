@@ -247,6 +247,11 @@ SEVERITY_VALUES = ("Informational", "Warning", "Error", "Critical", "Debug")
 
 _WHITESPACE_RE = re.compile(r"\s+")
 
+#: A bracket-quoted name segment, e.g. ``#[SAPv2Log.log]``. The dots inside are
+#: part of the name, not path separators, so they are masked out before any
+#: depth calculation.
+_BRACKETED_RE = re.compile(r"\[[^\]]*\]")
+
 
 def expected_uri(ip, port=SYSLOG_PORT):
     """The RemoteEndpointUri the device will build from a bare ``ip=``."""
@@ -1306,53 +1311,67 @@ UNMANAGED_MODES = ("ignore", "report", "purge")
 
 
 def list_writers(client):
-    """Every writer object under ``Logs#0``, as ``{(type_key, name): path}``.
+    """Every writer under ``Logs#0``, as ``{(type_key, name): (path, props)}``.
+
+    One deep read rather than a listing plus a read per writer - a device with
+    a dozen log files would otherwise cost a dozen round trips just to say what
+    is there.
 
     Names are bracket-quoted on the wire whenever they contain a ``.``, which
-    every ``log_file`` name does, so the segment is partitioned on ``#`` rather
-    than split on dots. Non-writer children (``LogRotator#0``) are skipped.
+    every ``log_file`` name does, so those dots are masked before working out
+    which objects are direct children, and the segment is partitioned on ``#``
+    rather than split. Non-writer children (``LogRotator#0``) are skipped.
     """
     by_sap_type = dict((t.sap_type, t) for t in WRITER_TYPES.values())
     found = {}
-    for path in client.children(LOGS_ROOT):
-        sap_type, _sep, name = path[len(LOGS_ROOT) + 1:].partition("#")
+    for path, props in client.tree(LOGS_ROOT).items():
+        if not path.startswith(LOGS_ROOT + "."):
+            continue
+        segment = path[len(LOGS_ROOT) + 1:]
+        if "." in _BRACKETED_RE.sub("", segment):
+            continue  # a descendant, not a writer
+        sap_type, _sep, name = segment.partition("#")
         wtype = by_sap_type.get(sap_type)
         if wtype is not None:
-            found[(wtype.key, name.strip("[]"))] = path
+            found[(wtype.key, name.strip("[]"))] = (path, props)
     return found
 
 
 def find_unmanaged(client, desired_writers):
-    """Writers on the device that `desired_writers` does not name.
+    """Every writer on the device that `desired_writers` does not name.
 
-    **Scoped to the types the task manages**, and that scoping is the safety
-    property rather than a convenience. A Core PRO ships with around a dozen
-    LogFileWriters of its own - Connected_Msg.log, SAPv2Log.log, Scenes.log and
-    the rest. A task that manages one udp_syslog writer has no business forming
-    an opinion about those, and a purge that swept them up would be silent,
-    immediate and irreversible.
+    Reports ALL of them, of every type, and marks which are in scope for a
+    purge. The two questions are different and were briefly conflated:
 
-    Measured on the sandbox: 15 writers present, a playbook naming one. Blunt
-    purge would delete all 15; scoped to the named type it deletes exactly the
-    one stale writer that was the point.
+    - *What else is on this device?* is non-destructive and the honest answer
+      includes the dozen LogFileWriters a Core PRO ships with and any legacy
+      TCP writer. The legacy one in particular is the thing an estate migration
+      most wants surfaced.
+    - *What may be deleted?* has to be narrower. Only writers of the TYPES the
+      task names are ever purged, which is what stops a task managing one
+      udp_syslog writer from sweeping away the device's own log files. Measured
+      on the sandbox: 15 writers, a playbook naming one - unscoped that is 15
+      deletions, scoped it is exactly the one stale writer that was the point.
+
+    So ``in_purge_scope`` records the second answer while the list itself gives
+    the first.
     """
     named = set((entry.get("type") or DEFAULT_WRITER_TYPE, entry["name"])
                 for entry in desired_writers)
     managed_types = set(key for key, _name in named)
 
     found = []
-    for (key, name), path in sorted(list_writers(client).items()):
-        if (key, name) in named or key not in managed_types:
+    for (key, name), (path, props) in sorted(list_writers(client).items()):
+        if (key, name) in named:
             continue
-        entry = {"name": name, "type": key, "path": path}
-        # Record where it pointed. Every type that can be purged can also be
-        # recreated, but only by someone who knows its endpoint - and after a
-        # purge there is nothing left to read it from. One cheap read here is
-        # what makes the removal reversible rather than merely undoable in
-        # principle.
-        wtype = writer_type(key)
-        if wtype.endpoint_property:
-            entry["endpoint"] = client.get(path).get(wtype.endpoint_property, "")
+        entry = {"name": name, "type": key, "path": path,
+                 "in_purge_scope": key in managed_types}
+        # Where it pointed, recorded before anything is removed. Every
+        # purgeable type can be recreated, but only by someone who knows its
+        # endpoint, and afterwards there is nothing left to read it from.
+        endpoint_property = writer_type(key).endpoint_property
+        if endpoint_property:
+            entry["endpoint"] = props.get(endpoint_property, "")
         found.append(entry)
     return found
 
@@ -1376,7 +1395,11 @@ def plan_device(client, writers, rotation=None, on_immutable_change="fail",
         found = find_unmanaged(client, writers)
         for entry in found:
             wtype = writer_type(entry["type"])
-            if unmanaged != "purge":
+            if not entry["in_purge_scope"]:
+                # A different type from anything this task names. Reported so
+                # the device's real contents are visible, never touched.
+                entry["action"] = "out_of_scope"
+            elif unmanaged != "purge":
                 entry["action"] = "reported"
             elif not wtype.replaceable:
                 # The rail that matters more here than anywhere else: a purge
