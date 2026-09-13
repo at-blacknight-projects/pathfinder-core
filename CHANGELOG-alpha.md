@@ -1,3 +1,15 @@
+## [0.1.0-alpha.12](https://github.com/at-blacknight-projects/pathfinder-core/compare/v0.1.0-alpha.11...v0.1.0-alpha.12) (2026-09-13)
+
+
+### Features
+
+* drop the pfc_ prefix from module names ([4c5e607](https://github.com/at-blacknight-projects/pathfinder-core/commit/4c5e607c92f0f2f95ba57730f4258c9e30f2b024))
+
+
+### Bug Fixes
+
+* **logs:** report every unmanaged writer, purge only the managed types ([0f9e41b](https://github.com/at-blacknight-projects/pathfinder-core/commit/0f9e41bd20973f540a50e507845b4d42b5679ec8))
+
 ## [0.1.0-alpha.11](https://github.com/at-blacknight-projects/pathfinder-core/compare/v0.1.0-alpha.10...v0.1.0-alpha.11) (2026-09-13)
 
 
