@@ -1,15 +1,18 @@
 ---
 name: CI
 
-# Release channels come from atb-ci's semantic-release config: main is the
-# stable channel, and rc/uat/dev/alpha are prerelease channels.
+# Release channels come from ci-templates' default semantic-release config:
+# main is the stable channel, and rc/uat/dev/alpha are prerelease channels.
 on:
   push:
     branches: [main, rc, uat, dev, alpha]
   pull_request:
 
+# Read-only by default. The two jobs that call ci-templates grant their own
+# scopes below: a reusable workflow's token is capped at its caller's, so the
+# template's permissions blocks can only narrow what the calling job gives.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   units:
@@ -110,64 +113,41 @@ jobs:
       - name: Build collection artifact
         run: ansible-galaxy collection build --force
 
+  # ── Shared checks ──────────────────────────────────────────────────────────
+  # PR title (conventional commits, which is what versions the release) and a
+  # Trivy filesystem scan, from the shared ci-templates. Pinned to the v0 major
+  # tag, which ci-templates moves to each compatible release.
+  shared:
+    name: Shared
+    permissions:
+      contents: read
+      pull-requests: read
+      security-events: write
+    uses: at-blacknight-projects/ci-templates/.github/workflows/no-build-ci.yml@v0
+
   # ── Release ────────────────────────────────────────────────────────────────
-  # atb-ci's stages are composed directly rather than going through its
-  # no-build-release wrapper. The wrapper forwards `replacement-files` (a JSON
-  # array) into `git-commit-files`, which stage-release-semantic interpolates
-  # as a bare string: the inner quotes are lost and the asset becomes the glob
-  # `[galaxy.yml]`, a character class that matches no file. The replacement
-  # then happens, uploads, restores, and is silently dropped from the release
-  # commit. Passing `git-commit-files` a plain path here avoids that entirely.
-  version:
-    name: Detect version
-    needs: [units, sanity, lint, build]
-    if: github.event_name == 'push'
-    uses: at-blacknight/atb-ci/.github/workflows/stage-version-detect.yml@v0.1.1
-    with:
-      upload-artifacts: false
-
-  stamp-version:
-    name: Stamp version into galaxy.yml
-    needs: version
-    if: needs.version.outputs.would-release == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      # galaxy.yml carries a hardcoded `version:` that MUST equal the release
-      # tag. Left unstamped, `ansible-galaxy collection install` resolves a tag
-      # whose artifact then declares a different version.
-      - name: Stamp version
-        env:
-          VERSION: ${{ needs.version.outputs.version }}
-        run: |
-          set -euo pipefail
-          test -n "$VERSION"
-          sed -i -E "s|^version:.*|version: ${VERSION}|" galaxy.yml
-          grep -E "^version:" galaxy.yml
-          # Fail loudly rather than release a mismatched artifact.
-          grep -qx "version: ${VERSION}" galaxy.yml
-
-      # stage-release-semantic restores everything under ./artifacts to the
-      # repository root before running semantic-release, so the layout here
-      # must mirror the repo layout.
-      - name: Upload stamped galaxy.yml
-        uses: actions/upload-artifact@v4
-        with:
-          name: text-replace-galaxy
-          path: galaxy.yml
-          retention-days: 5
-
+  # In this file rather than a separate release workflow so it can wait on the
+  # collection checks above: a caller cannot add `needs` to the jobs inside a
+  # reusable workflow, so the gate has to be on the job that calls it.
+  #
+  # galaxy.yml carries a hardcoded `version:` that MUST equal the release tag.
+  # Left unstamped, `ansible-galaxy collection install` resolves a tag whose
+  # artifact then declares a different version. The bump stage rewrites it and
+  # hands the changed file to the release commit; the pattern is a sed regex.
   release:
     name: Release
-    needs: [version, stamp-version]
-    if: needs.version.outputs.would-release == 'true'
+    needs: [units, sanity, lint, build, shared]
+    if: github.event_name == 'push'
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: false
     permissions:
       contents: write
-    uses: at-blacknight/atb-ci/.github/workflows/stage-release-semantic.yml@v0.1.1
+      issues: write
+      pull-requests: write
+    uses: at-blacknight-projects/ci-templates/.github/workflows/no-build-release.yml@v0
     with:
-      download-artifacts: true
-      artifact-pattern: 'text-replace-*'
-      # A plain path, not a JSON array — this is what the stage expects, and
-      # it lands in the @semantic-release/git assets alongside the changelog.
-      git-commit-files: 'galaxy.yml'
+      replacements: '[{"file": "galaxy.yml", "pattern": "^version:.*", "replacement": "version: {{version}}"}]'
+    secrets:
+      app-id: ${{ secrets.RELEASE_APP_ID }}
+      app-private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
