@@ -1337,7 +1337,32 @@ def list_writers(client):
     return found
 
 
-def find_unmanaged(client, desired_writers):
+def validate_unmanaged(unmanaged, purge_types):
+    """Problems with the unmanaged-writer settings, before any session opens.
+
+    A purge has to be told which types it may delete. Its scope used to be
+    inferred from the types `writers` named, and that inference was wrong for
+    the case a purge exists for: a cutover names the NEW writer's type, so the
+    legacy writer it replaces - always a different type - could never be in
+    scope, while naming a log_file writer for any reason put every one of the
+    device's own log files in scope. Neither is something a reader of the task
+    would guess, so the scope is stated rather than derived.
+    """
+    problems = []
+    if unmanaged not in UNMANAGED_MODES:
+        problems.append("unmanaged_writers must be one of %s, not %r"
+                        % (", ".join(UNMANAGED_MODES), unmanaged))
+    for key in purge_types or ():
+        if key not in WRITER_TYPES:
+            problems.append("purge_types: unknown writer type %r" % key)
+    if unmanaged == "purge" and not purge_types:
+        problems.append(
+            "unmanaged_writers=purge needs purge_types: name the writer types a "
+            "purge may delete. Nothing is inferred from the types in writers.")
+    return problems
+
+
+def find_unmanaged(client, desired_writers, purge_types=()):
     """Every writer on the device that `desired_writers` does not name.
 
     Reports ALL of them, of every type, and marks which are in scope for a
@@ -1347,25 +1372,26 @@ def find_unmanaged(client, desired_writers):
       includes the dozen LogFileWriters a Core PRO ships with and any legacy
       TCP writer. The legacy one in particular is the thing an estate migration
       most wants surfaced.
-    - *What may be deleted?* has to be narrower. Only writers of the TYPES the
-      task names are ever purged, which is what stops a task managing one
-      udp_syslog writer from sweeping away the device's own log files. Measured
-      on the sandbox: 15 writers, a playbook naming one - unscoped that is 15
-      deletions, scoped it is exactly the one stale writer that was the point.
+    - *What may be deleted?* has to be narrower: only writers of the types in
+      `purge_types`. Leaving log_file out of it is what stops a purge sweeping
+      away the device's own log files. Measured on the sandbox: 15 writers, a
+      playbook naming one - unscoped that is 15 deletions, scoped it is exactly
+      the one stale writer that was the point.
 
     So ``in_purge_scope`` records the second answer while the list itself gives
-    the first.
+    the first. In report mode it previews exactly what a purge with the same
+    `purge_types` would consider.
     """
     named = set((entry.get("type") or DEFAULT_WRITER_TYPE, entry["name"])
                 for entry in desired_writers)
-    managed_types = set(key for key, _name in named)
+    purge_types = set(purge_types or ())
 
     found = []
     for (key, name), (path, props) in sorted(list_writers(client).items()):
         if (key, name) in named:
             continue
         entry = {"name": name, "type": key, "path": path,
-                 "in_purge_scope": key in managed_types}
+                 "in_purge_scope": key in purge_types}
         # Where it pointed, recorded before anything is removed. Every
         # purgeable type can be recreated, but only by someone who knows its
         # endpoint, and afterwards there is nothing left to read it from.
@@ -1377,8 +1403,12 @@ def find_unmanaged(client, desired_writers):
 
 
 def plan_device(client, writers, rotation=None, on_immutable_change="fail",
-                unmanaged="ignore"):
+                unmanaged="ignore", purge_types=()):
     """Read every writer plus rotation and plan the whole device. Reads only."""
+    if unmanaged == "purge" and not purge_types:
+        # The module refuses this before connecting (validate_unmanaged); this
+        # is the same rail for any other caller, failing closed before a read.
+        raise ValueError("unmanaged_writers=purge needs purge_types")
     rotation = rotation or {}
     planned = []
     for entry in writers:
@@ -1388,24 +1418,25 @@ def plan_device(client, writers, rotation=None, on_immutable_change="fail",
             on_immutable_change=on_immutable_change,
             purge_subscriptions=entry.get("subscriptions_purge", False))))
 
-    # `writers` being empty means no managed types, so nothing is in scope -
-    # which also stops an empty list from purging a whole device.
+    # An empty `writers` looks at nothing, whatever purge_types says: an
+    # accidentally empty list must not be able to empty a device.
     found = []
     if unmanaged != "ignore" and writers:
-        found = find_unmanaged(client, writers)
+        found = find_unmanaged(client, writers, purge_types)
         for entry in found:
             wtype = writer_type(entry["type"])
             if not entry["in_purge_scope"]:
-                # A different type from anything this task names. Reported so
-                # the device's real contents are visible, never touched.
+                # A type purge_types does not list. Reported so the device's
+                # real contents are visible, never touched.
                 entry["action"] = "out_of_scope"
             elif unmanaged != "purge":
                 entry["action"] = "reported"
             elif not wtype.replaceable:
                 # The rail that matters more here than anywhere else: a purge
                 # is the one place a writer gets deleted without anyone naming
-                # it. Skip rather than refuse the run - the estate is full of
-                # legacy TCP writers and blocking on them would be obstructive.
+                # it. Skip rather than refuse the run. Every real type is
+                # creatable today, so this guards a type a firmware refuses or
+                # one added later.
                 entry["action"] = "skipped"
                 entry["reason"] = (
                     "a %s cannot be recreated over SapV2, so purging it would "

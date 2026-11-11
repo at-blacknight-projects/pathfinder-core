@@ -252,26 +252,50 @@ options:
         an estate migration wants surfaced.
       - >-
         C(purge) is narrower, and deliberately: it only ever deletes writers of
-        the B(types) named in I(writers). That is what stops a task managing one
-        C(udp_syslog) writer from sweeping away the device's own log files.
-        Measured on a real device - 15 writers present, a playbook naming one -
-        an unscoped purge would delete all 15, while the scoped one deletes
-        exactly the stale writer that was the point.
+        the types listed in I(purge_types), and fails before connecting if that
+        is empty. Leaving C(log_file) out of it is what stops a purge sweeping
+        away the device's own log files. Measured on a real device - 15 writers
+        present, a playbook naming one - an unscoped purge would delete all 15,
+        while the scoped one deletes exactly the stale writer that was the
+        point.
       - >-
         Each entry carries C(in_purge_scope) saying which of the two it falls
         under, so a report of five writers cannot be mistaken for five pending
         deletions. Out-of-scope entries are reported with C(action=out_of_scope).
       - >-
-        C(purge) never deletes a type that cannot be recreated. A C(tcp_client)
-        is skipped and reported rather than removed, because a purge is the one
+        C(purge) never deletes a type that cannot be recreated: such a writer is
+        skipped and reported rather than removed, because a purge is the one
         place a writer would be deleted without anyone naming it, and that
-        deletion would be one-way.
+        deletion would be one-way. Every writer type this module knows is
+        creatable today, so this guards a type a firmware refuses to create.
       - Purge deletions run in the same phase as C(state=absent) entries, so
         they happen only after every C(present) writer has been read back.
-      - An empty I(writers) names no types, so nothing is ever in scope.
+      - An empty I(writers) looks at nothing, so an accidentally empty list
+        cannot purge a device whatever I(purge_types) says.
     type: str
     choices: [ignore, report, purge]
     default: ignore
+  purge_types:
+    description:
+      - Writer types a C(purge) of I(unmanaged_writers) may delete. Required,
+        and non-empty, when I(unmanaged_writers=purge).
+      - >-
+        Stated rather than inferred. The scope used to be the types named in
+        I(writers), which is wrong for the case a purge exists for: a cutover
+        names the new writer's type, so the legacy writer it replaces - always
+        a different type - was never in scope.
+      - >-
+        With I(unmanaged_writers=report) it is optional, and sets
+        C(in_purge_scope) in the C(unmanaged) return value, so a report previews
+        exactly what the same purge would delete.
+      - >-
+        To retire a legacy C(tcp_client) while shipping C(udp_syslog), list
+        both; leave C(log_file) out unless the device's own log files are
+        meant to go.
+    type: list
+    elements: str
+    choices: [udp_syslog, tcp_client, tcp_listener, log_file]
+    default: []
   rotation:
     description:
       - Log rotation and cleanup. C(max_file_size), C(max_count),
@@ -397,6 +421,21 @@ EXAMPLES = r"""
   # Task-level subscriptions and settings apply to alloy_site1. The absent
   # entry ignores them: nothing is configured on a writer being deleted.
 
+- name: Retire whatever shipping writers are left, without knowing their names
+  at_blacknight.pathfinder_core.logs:
+    host: "{{ inventory_hostname }}"
+    username: "{{ pfc_username }}"
+    password: "{{ pfc_password }}"
+    writers:
+      - name: alloy_site1
+        ip: 192.0.2.10
+    unmanaged_writers: purge
+    purge_types: [udp_syslog, tcp_client]
+  # Deletes every udp_syslog and tcp_client writer except alloy_site1, after
+  # alloy_site1 has been read back. log_file is not listed, so the device's own
+  # log files are untouched. Run it with unmanaged_writers=report first: the
+  # same purge_types makes in_purge_scope show exactly what would go.
+
 - name: Two writers with deliberately different subscription sets
   at_blacknight.pathfinder_core.logs:
     host: pfc-002.example.net
@@ -513,11 +552,11 @@ unmanaged:
   description:
     - >-
       Writers found on the device that I(writers) did not name - of every type,
-      with C(in_purge_scope) marking those a purge would consider and
+      with C(in_purge_scope) marking those whose type is in I(purge_types) and
       C(endpoint) recording where each pointed while that is still readable.
     - >-
       C(action) is C(reported) (in scope, untouched), C(out_of_scope) (a type
-      this task does not manage, never touched), C(delete), or C(skipped) (in
+      not in I(purge_types), never touched), C(delete), or C(skipped) (in
       scope but not recreatable, so not deleted).
     - >-
       Always empty when I(unmanaged_writers) is C(ignore), which means "not
@@ -571,6 +610,7 @@ from ansible_collections.at_blacknight.pathfinder_core.plugins.module_utils.logs
     resolve_writers,
     rotation_writes,
     validate_rotation,
+    validate_unmanaged,
     validate_writers,
 )
 
@@ -637,6 +677,9 @@ def main():
             startup_script=dict(type="list", elements="str"),
             unmanaged_writers=dict(type="str", default="ignore",
                                    choices=["ignore", "report", "purge"]),
+            purge_types=dict(type="list", elements="str", default=[],
+                             choices=["udp_syslog", "tcp_client", "tcp_listener",
+                                      "log_file"]),
             on_immutable_change=dict(type="str", default="fail",
                                      choices=["fail", "replace"]),
             idle_timeout=dict(type="float", default=1.5),
@@ -652,7 +695,9 @@ def main():
         dict((key, params[key]) for key in INHERITED_KEYS))
     rotation = params["rotation"] or {}
 
-    problems = validate_writers(writers) + validate_rotation(rotation)
+    problems = (validate_writers(writers) + validate_rotation(rotation)
+                + validate_unmanaged(params["unmanaged_writers"],
+                                     params["purge_types"]))
     if problems:
         # Fail before opening a session. Every one of these would otherwise be
         # accepted on the wire and silently ignored by the device.
@@ -686,7 +731,8 @@ def main():
 
         planned = plan_device(client, writers, rotation,
                               on_immutable_change=params["on_immutable_change"],
-                              unmanaged=params["unmanaged_writers"])
+                              unmanaged=params["unmanaged_writers"],
+                              purge_types=params["purge_types"])
 
         def read_state():
             """Refresh the parts of the result that a write can change."""

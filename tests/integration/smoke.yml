@@ -283,13 +283,14 @@
           vars:
             rule: "{{ rotation.rotation['Logs#0.LogRotator#0.RotateRule#0'] }}"
 
-        - name: 9. Unmanaged writers are scoped to the named types
+        - name: 9. Unmanaged writers are scoped to purge_types
           at_blacknight.pathfinder_core.logs:
             <<: *common
             writers:
               - name: "{{ udp_writer }}"
                 ip: "{{ sink_a }}"
             unmanaged_writers: report
+            purge_types: [udp_syslog, tcp_client]
           register: unmanaged
           check_mode: true
 
@@ -300,7 +301,7 @@
               - not file_entry[0].in_purge_scope
               - file_entry[0].action == 'out_of_scope'
             fail_msg: >-
-              A purge driven by a udp_syslog writer must never consider a
+              A purge of udp_syslog and tcp_client must never consider a
               log_file writer - that is what stops it deleting the device's own
               log files.
             quiet: true
