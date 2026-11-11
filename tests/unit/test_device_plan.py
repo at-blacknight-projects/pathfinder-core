@@ -395,9 +395,9 @@ if __name__ == "__main__":
 class TestUnmanagedWriters(unittest.TestCase):
     """Writers the task did not name are ignored unless asked about.
 
-    The scoping to named TYPES is the safety property. A Core PRO ships with
-    around a dozen LogFileWriters of its own, and a purge that swept them up
-    would be silent, immediate and irreversible.
+    The scoping to the types in ``purge_types`` is the safety property. A Core
+    PRO ships with around a dozen LogFileWriters of its own, and a purge that
+    swept them up would be silent, immediate and irreversible.
     """
 
     def device(self):
@@ -446,12 +446,16 @@ class TestUnmanagedWriters(unittest.TestCase):
         self.assertEqual(plan.actions, [])
         self.assertFalse(plan.changed)
 
+    def deleted(self, plan):
+        return sorted(a.to_dict()["writer"] for a in plan.actions
+                      if a.kind == "writer_delete")
+
     def test_report_marks_what_a_purge_would_actually_touch(self):
         # Listing more than a purge would delete is only safe if the difference
         # is visible, or someone reads five entries and expects five deletions.
         device = self.device()
         plan = logs.plan_device(device, [writer("alloy_site1")],
-                                unmanaged="report")
+                                unmanaged="report", purge_types=["udp_syslog"])
         by_name = dict((u["name"], u) for u in plan.unmanaged)
         self.assertTrue(by_name["stale_one"]["in_purge_scope"])
         self.assertEqual(by_name["stale_one"]["action"], "reported")
@@ -459,18 +463,70 @@ class TestUnmanagedWriters(unittest.TestCase):
             self.assertFalse(by_name[name]["in_purge_scope"])
             self.assertEqual(by_name[name]["action"], "out_of_scope")
 
-    def test_purge_deletes_only_the_managed_type(self):
-        # The whole point: a task naming a udp_syslog writer must not delete
-        # the device's own log files or the legacy TCP writer.
+    def test_report_previews_exactly_what_the_same_purge_deletes(self):
+        types = ["udp_syslog", "tcp_client"]
+        report = logs.plan_device(self.device(), [writer("alloy_site1")],
+                                  unmanaged="report", purge_types=types)
+        purge = logs.plan_device(self.device(), [writer("alloy_site1")],
+                                 unmanaged="purge", purge_types=types)
+        self.assertEqual(
+            sorted(u["name"] for u in report.unmanaged if u["in_purge_scope"]),
+            self.deleted(purge))
+
+    def test_report_without_purge_types_puts_nothing_in_scope(self):
+        # Nothing is inferred from the types in `writers` any more, so a report
+        # that was not told a scope must not imply one.
+        plan = logs.plan_device(self.device(), [writer("alloy_site1")],
+                                unmanaged="report")
+        self.assertEqual(len(plan.unmanaged), 5)
+        self.assertFalse([u for u in plan.unmanaged if u["in_purge_scope"]])
+
+    def test_purge_deletes_only_the_listed_types(self):
+        # A purge of udp_syslog must not delete the device's own log files or
+        # the legacy TCP writer.
         device = self.device()
         plan = logs.plan_device(device, [writer("alloy_site1")],
-                                unmanaged="purge")
-        deleted = [a.to_dict()["writer"] for a in plan.actions
-                   if a.kind == "writer_delete"]
-        self.assertEqual(deleted, ["stale_one"])
+                                unmanaged="purge", purge_types=["udp_syslog"])
+        self.assertEqual(self.deleted(plan), ["stale_one"])
         self.assertEqual(
             sorted(u["name"] for u in plan.unmanaged if u["action"] == "delete"),
             ["stale_one"])
+
+    def test_a_cutover_purge_reaches_the_legacy_tcp_writer(self):
+        # The case the scope used to get wrong. The task names only the new
+        # udp_syslog writer, and the writer being retired is a tcp_client, so
+        # inferring the scope from `writers` could never reach it.
+        device = self.device()
+        plan = logs.plan_device(device, [writer("alloy_site1")],
+                                unmanaged="purge",
+                                purge_types=["udp_syslog", "tcp_client"])
+        self.assertEqual(self.deleted(plan), ["legacy", "stale_one"])
+        by_name = dict((u["name"], u) for u in plan.unmanaged)
+        for name in ("Connected_Msg.log", "SAPv2Log.log", "Scenes.log"):
+            self.assertEqual(by_name[name]["action"], "out_of_scope")
+
+    def test_naming_a_log_file_does_not_put_the_devices_log_files_in_scope(self):
+        # The inverse failure of the old inference: managing ONE log file put
+        # every log file on the device in scope. Only purge_types counts now.
+        device = self.device()
+        plan = logs.plan_device(
+            device,
+            [writer("alloy_site1"),
+             writer("Scenes.log", type="log_file", ip=None)],
+            unmanaged="purge", purge_types=["udp_syslog"])
+        self.assertEqual(self.deleted(plan), ["stale_one"])
+        by_name = dict((u["name"], u) for u in plan.unmanaged)
+        for name in ("Connected_Msg.log", "SAPv2Log.log"):
+            self.assertFalse(by_name[name]["in_purge_scope"])
+        # A named writer is managed, never "unmanaged", whatever its type.
+        self.assertNotIn("Scenes.log", by_name)
+
+    def test_purge_without_purge_types_is_refused_before_any_read(self):
+        device = self.device()
+        with self.assertRaises(ValueError):
+            logs.plan_device(device, [writer("alloy_site1")], unmanaged="purge")
+        self.assertEqual(getattr(device, "reads_issued", 0), 0)
+        self.assertEqual(device.writes, [])
 
     def test_one_read_regardless_of_how_many_writers_exist(self):
         device = self.device()
@@ -481,17 +537,30 @@ class TestUnmanagedWriters(unittest.TestCase):
     def test_a_tcp_client_is_purgeable_now_that_it_can_be_recreated(self):
         # It used to be skipped, on the belief that a TcpClientWriter could not
         # be created. The device disproved that, so the rail no longer applies
-        # to this type - it is still tested, against a synthetic one, in
-        # test_writer_types.
+        # to this type - it is still tested, against a synthetic one, below and
+        # in test_writer_types.
         device = self.device()
-        plan = logs.plan_device(
-            device,
-            [writer("alloy_site1"), writer("keep_me", type="tcp_client",
-                                           ip="192.0.2.70")],
-            unmanaged="purge")
+        plan = logs.plan_device(device, [writer("alloy_site1")],
+                                unmanaged="purge", purge_types=["tcp_client"])
         by_name = dict((u["name"], u) for u in plan.unmanaged)
-        self.assertEqual(by_name["stale_one"]["action"], "delete")
         self.assertEqual(by_name["legacy"]["action"], "delete")
+        self.assertEqual(by_name["stale_one"]["action"], "out_of_scope")
+
+    def test_a_purge_skips_a_type_that_cannot_be_recreated(self):
+        # The rail still holds when the type IS listed: a purge deletes
+        # without anyone naming the writer, so it must never be one-way.
+        from test_writer_types import uncreatable_type
+        device = self.device()
+        device.reads["Logs#0.FrozenWriter#ice"] = {
+            "Name": "ice", "RemoteEndpointUri": "tcp://192.0.2.21:1515/"}
+        with uncreatable_type():
+            plan = logs.plan_device(device, [writer("alloy_site1")],
+                                    unmanaged="purge",
+                                    purge_types=["udp_syslog", "frozen"])
+        by_name = dict((u["name"], u) for u in plan.unmanaged)
+        self.assertEqual(by_name["ice"]["action"], "skipped")
+        self.assertIn("cannot be recreated", by_name["ice"]["reason"])
+        self.assertEqual(self.deleted(plan), ["stale_one"])
 
     def test_the_endpoint_is_recorded_before_anything_is_removed(self):
         # A purge is reversible only for someone who knows where the writer
@@ -510,7 +579,7 @@ class TestUnmanagedWriters(unittest.TestCase):
         plan = logs.plan_device(
             device,
             [writer("alloy_site1"), writer("brand_new", ip="192.0.2.50")],
-            unmanaged="purge")
+            unmanaged="purge", purge_types=["udp_syslog"])
         kinds = [a.kind for a in plan.actions]
         self.assertLess(kinds.index("writer_create"), kinds.index("writer_delete"))
         self.assertEqual(plan.apply(device), [])
@@ -523,21 +592,47 @@ class TestUnmanagedWriters(unittest.TestCase):
         plan = logs.plan_device(
             device,
             [writer("alloy_site1"), writer("brand_new", ip="192.0.2.50")],
-            unmanaged="purge")
+            unmanaged="purge", purge_types=["udp_syslog"])
         self.assertTrue(plan.apply(device))
         self.assertNotIn(("del", "Logs#0.UdpSysLogWriter#stale_one"), device.verbs())
 
     def test_an_empty_writer_list_purges_nothing(self):
-        # No named types means nothing is in scope, so an accidentally empty
-        # list cannot empty a device.
+        # Even with every type listed, an accidentally empty list cannot empty
+        # a device.
         device = self.device()
-        plan = logs.plan_device(device, [], unmanaged="purge")
+        plan = logs.plan_device(device, [], unmanaged="purge",
+                                purge_types=sorted(logs.WRITER_TYPES))
         self.assertEqual(plan.unmanaged, [])
         self.assertEqual(plan.actions, [])
 
     def test_a_purge_delete_is_marked_destructive(self):
         device = self.device()
         plan = logs.plan_device(device, [writer("alloy_site1")],
-                                unmanaged="purge")
+                                unmanaged="purge", purge_types=["udp_syslog"])
         self.assertTrue(all(a.destructive for a in plan.actions
                             if a.kind == "writer_delete"))
+
+
+class TestValidateUnmanaged(unittest.TestCase):
+    """The settings are checked before a session opens, like every other input."""
+
+    def test_purge_needs_purge_types(self):
+        problems = logs.validate_unmanaged("purge", [])
+        self.assertEqual(len(problems), 1)
+        self.assertIn("purge_types", problems[0])
+
+    def test_purge_with_types_is_accepted(self):
+        self.assertEqual(
+            logs.validate_unmanaged("purge", ["udp_syslog", "tcp_client"]), [])
+
+    def test_report_and_ignore_do_not_need_them(self):
+        self.assertEqual(logs.validate_unmanaged("report", []), [])
+        self.assertEqual(logs.validate_unmanaged("ignore", []), [])
+
+    def test_an_unknown_type_is_rejected(self):
+        problems = logs.validate_unmanaged("report", ["udp_sylog"])
+        self.assertEqual(len(problems), 1)
+        self.assertIn("udp_sylog", problems[0])
+
+    def test_an_unknown_mode_is_rejected(self):
+        self.assertTrue(logs.validate_unmanaged("sweep", ["udp_syslog"]))

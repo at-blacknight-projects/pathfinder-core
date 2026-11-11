@@ -1,3 +1,9 @@
+## [0.1.1-alpha.1](https://github.com/at-blacknight-projects/pathfinder-core/compare/v0.1.0...v0.1.1-alpha.1) (2026-11-11)
+
+### Bug Fixes
+
+* **logs:** scope unmanaged-writer purges by an explicit purge_types ([8be1e6d](https://github.com/at-blacknight-projects/pathfinder-core/commit/8be1e6debe091b84afe8e5df1ef7ce4c153c0b30))
+
 ## [0.1.0-alpha.14](https://github.com/at-blacknight-projects/pathfinder-core/compare/v0.1.0-alpha.13...v0.1.0-alpha.14) (2026-09-13)
 
 
